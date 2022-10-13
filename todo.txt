@@ -1,0 +1,18 @@
+1. Hent data
+    - Brug dataloader
+    - Lav data downscaling af billederne til at lave testset
+    - Smid ud i test og training sets
+
+2. Kør model på lille data subset
+3. Visualiser vores resultater på forskellig vis
+4. Evaluation metrics
+    - PSNR
+    - ???
+
+4. TBD
+
+
+
+
+Spørgsmål:
+- Datasets i collab? https://stackoverflow.com/questions/71619540/how-to-upload-a-62-gb-datasets-to-google-colab
