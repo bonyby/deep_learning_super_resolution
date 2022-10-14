@@ -32,4 +32,4 @@ def makeDatasetIntoPatches(datasetPath, newPatchesPath):
                 patch.save("./Datasets/" + newPatchesPath + "/" + name + "_" + str(counter) + ".png")
 
 # ----------- code ------------
-#makeDatasetIntoPatches("T91/T91_Original", "T91/T91_HR_Patches"
+#makeDatasetIntoPatches("T91/T91_Original", "T91/T91_HR_Patches")
