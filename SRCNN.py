@@ -79,7 +79,7 @@ def SRCNN(scale):
 
 #------------------- CODE -------------------
 # dataset = datasets.StanfordCars(root="/.", download=True)
-dataset = datasets.Places365(root="/.")
+dataset = datasets.Places365(root="/.", download=True)
 img, label = dataset[0]
 print(img.size)
 
