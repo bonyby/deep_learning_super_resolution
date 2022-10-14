@@ -3,10 +3,19 @@ import numpy as np
 import matplotlib as plt
 
 from torchsummary import summary
+from torchvision import datasets
 from torch import nn
 from torch import optim
 from torch.utils.data import DataLoader
 
+
+
+def get_data():
+    print("wallah")
+    #Get data here
+
+
+    
 
 
 #
@@ -54,7 +63,7 @@ def SRCNN(scale):
 
     model = nn.Sequential(
         #Preprocessing with bicubic interpolation
-        nn.Upsample(scale_factor=scale, mode='bicubic'),
+        nn  .Upsample(scale_factor=scale, mode='bicubic'),
 
         #Model
         nn.Conv2d(channels, n1, (f1, f1)), 
@@ -69,13 +78,18 @@ def SRCNN(scale):
 
 
 #------------------- CODE -------------------
-train = "" # not defined yet
-val = "" # not defined yet
+# dataset = datasets.StanfordCars(root="/.", download=True)
+dataset = datasets.Places365(root="/.")
+img, label = dataset[0]
+print(img.size)
 
-lr = 0.01
-model = SRCNN(scale=3)
-opt = optim.SGD(model.parameters(), lr = lr, momentum=0.9)
+# train = "" # not defined yet
+# val = "" # not defined yet
 
-epochs = 10
-loss_func = MSE
-fit(epochs, model, loss_func, opt, train, val)
+# lr = 0.01
+# model = SRCNN(scale=3)
+# opt = optim.SGD(model.parameters(), lr = lr, momentum=0.9)
+
+# epochs = 10
+# loss_func = MSE
+# fit(epochs, model, loss_func, opt, train, val)
