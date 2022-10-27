@@ -1,12 +1,16 @@
 import torch
 import numpy as np
 import matplotlib as plt
+import glob
 
 from torchsummary import summary
 from torchvision import datasets
+from torchvision import transforms
 from torch import nn
 from torch import optim
 from torch.utils.data import DataLoader
+from torch.utils.data import TensorDataset
+from PIL import Image
 
 
 
@@ -63,7 +67,7 @@ def SRCNN(scale):
 
     model = nn.Sequential(
         #Preprocessing with bicubic interpolation
-        nn  .Upsample(scale_factor=scale, mode='bicubic'),
+        nn.Upsample(scale_factor=scale, mode='bicubic'),
 
         #Model
         nn.Conv2d(channels, n1, (f1, f1)), 
@@ -76,12 +80,30 @@ def SRCNN(scale):
 
     return model
 
+def get_tensor_images(path, n = -1):
+    images = []
+    pil_tensor_converter = transforms.ToTensor()
+
+    # Convert all images on the given path to tensors
+    counter = n
+    for f in glob.iglob(path + "/*"):
+        # Break if n images appended (if n = -1 - aka get all images - this never occurs)
+        if counter == 0:
+            break
+        
+        images.append(pil_tensor_converter(Image.open(f)))
+        counter -= 1
+
+    return TensorDataset(images)
+        
 
 #------------------- CODE -------------------
 # dataset = datasets.StanfordCars(root="/.", download=True)
-dataset = datasets.Places365(root="/.", download=True)
-img, label = dataset[0]
-print(img.size)
+# dataset = datasets.Places365(root="/.", download=True)
+hr_patches = get_tensor_images("./Datasets/T91/T91_HR_Patches", 50)
+print(hr_patches)
+# img, label = dataset[0]
+# print(img.size)
 
 # train = "" # not defined yet
 # val = "" # not defined yet

@@ -1,0 +1,41 @@
+Uge 43
+- Opsætning af dataloader
+- Pipeline for preprocessing af billeder (downscaling)
+- Træning med lille datasæt
+- Påbegynd pipeline for visualisering af resultater
+    - Kig på PSNR (Peak Signal To Noise Ration: https://towardsdatascience.com/super-resolution-a-basic-study-e01af1449e13)
+
+Uge 44
+- Færdiggør pipeline for visualisering af resultater
+- Setup af evaluation metrics (PSNR)
+- Træn SRCNN på fuldt dataset
+- Visualiser resultater og sammenlign PSNR
+- Kig på idéer til næste model/forbedringer
+
+Uge 45
+- Færdiggør v2 af vores model
+- Træne v2
+- Påbegynd evaluering og sammenlign med SRCNN hvis tiden er til det
+
+Uge 46
+- Færdiggør evaluering af v2 (hvis ikke færdig)
+- Sammenlign v2 med SRCNN
+- Evt. lav v3 af vores model
+
+
+Uge 47
+- (TBD)
+- Påbegynd rapport
+
+
+Uge 48
+- Færdig med at træne modeller (gerne i starten/midten af ugen)
+
+
+Uge 49
+- Færdiggør rapport
+
+
+
+
+---------------------- DEADLINE 09/12 (fredag uge 49) ----------------------
