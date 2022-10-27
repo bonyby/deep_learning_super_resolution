@@ -45,16 +45,35 @@ def fit(epochs, model, loss_func, opt, train_dl, valid_dl):
             )
         val_loss = np.sum(np.multiply(losses, nums)) / np.sum(nums)
 
-        print(epoch, val_loss)
-
-# Currently between two images
-
+        print("Epoch: " + str(epoch) + " Val loss: " + str(val_loss))
 
 def MSE(input, target):
-    loss = np.sum((input - target) ** 2)
-    loss /= (input.shape[0] * input.shape[1])
-    return loss
+    # Crop the target to the input size - the input loses some of it's size as the model doesn't use any padding
+    crop_transform = transforms.CenterCrop(input.size(dim=2))
+    tgt = crop_transform(target)
+    # print("Size of tgt: " + str(tgt.size()))
+    # print("Size of input: " + str(input.size()))
+    
+    # loss = 0
+    # bs = input.size(dim = 0)
+    # for i in range(bs):
+    #     loss += MSE_Single(input[i], tgt[i])
 
+    # return loss / bs
+
+    mse = nn.MSELoss()
+    return mse(input, tgt)
+
+def MSE_Single(input, target):
+    # Calculate MSE
+    inputNp = input.clone()
+    inputNp = inputNp.detach().numpy()
+    targetNp = target.clone()
+    targetNp = targetNp.detach().numpy()
+
+    loss = np.sum((inputNp - targetNp) ** 2)
+    loss /= (input.size(dim=0) * input.size(dim=1) * input.size(dim=2))
+    return loss
 
 def SRCNN(scale):
     # This model has 8129 parameters when channels = 1 (20099 when channels = 3) including bias, 8032 without - which is as in the article.
@@ -67,7 +86,7 @@ def SRCNN(scale):
 
     model = nn.Sequential(
         # Preprocessing with bicubic interpolation
-        nn.Upsample(scale_factor=scale, mode='bicubic'),
+        nn.Upsample(scale_factor=scale, mode='bicubic', align_corners= False),
 
         # Model
         nn.Conv2d(channels, n1, (f1, f1)),
@@ -79,6 +98,23 @@ def SRCNN(scale):
     )
 
     return model
+
+
+def reset_parameters(net):
+    '''Init layer parameters.'''
+    for m in net.modules():
+        if isinstance(m, nn.Conv2d):
+            torch.nn.init.kaiming_normal_(m.weight)
+            if m.bias is not None:
+                torch.nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.BatchNorm2d):
+            torch.nn.init.constant_(m.weight, 1) # Why 1?
+            torch.nn.init.constant_(m.bias, 0) # Why 0?
+        elif isinstance(m, nn.Linear):
+            torch.nn.init.kaiming_normal_(m.weight)
+            if m.bias is not None:
+                torch.nn.init.constant_(m.bias, 0)
+
 
 
 def get_tensor_images(path, n=-1, downscale_factor = 3):
@@ -106,11 +142,18 @@ def get_tensor_images(path, n=-1, downscale_factor = 3):
     imgStack = torch.stack(images)
     return TensorDataset(downsampledImages, imgStack)
 
-
 def get_image_dataloaders(path, n=-1, bs=8, downscale_factor = 3):
     hr_patches = get_tensor_images(path, n, downscale_factor)
     n = len(hr_patches)
-    train_dataset, test_dataset, val_dataset = torch.utils.data.random_split(hr_patches, [n*8//10, n//10, n//10])
+    
+    # Calculate the sizes of the data subsets
+    # We need to check the size difference to correct for rounding errors
+    trainSize = n*8//10
+    testSize = n//10
+    valSize = n//10
+    sizeDiff = trainSize + testSize + valSize - n
+    trainSize -= sizeDiff # correct for rounding errors
+    train_dataset, test_dataset, val_dataset = torch.utils.data.random_split(hr_patches, [trainSize, testSize, valSize])
     train_dl = DataLoader(train_dataset, batch_size=bs)
     test_dl = DataLoader(test_dataset, batch_size=bs)
     val_dl = DataLoader(val_dataset, batch_size=bs)
@@ -118,35 +161,28 @@ def get_image_dataloaders(path, n=-1, bs=8, downscale_factor = 3):
     return train_dl, test_dl, val_dl
 
 def show_tensor_as_image(tensor):
+    if tensor.ndimension() == 4:
+        tensor = tensor[0]
+
     tensor_pil_converter = transforms.ToPILImage()
     tensor_pil_converter(tensor).show()
 
-
 # ------------------- CODE -------------------
-# dataset = datasets.StanfordCars(root="/.", download=True)
-# dataset = datasets.Places365(root="/.", download=True)
-bs = 8
-train_dl, test_dl, val_dl = get_image_dataloaders("./Datasets/T91/T91_HR_Patches", 160, bs, 3)
 
-# for xb, yb in train_dl:
-#     print("xb[0] size: " + str(xb[0].size()))
-#     print("yb[0] size: " + str(yb[0].size()))
+bs = 64
+train_dl, test_dl, val_dl = get_image_dataloaders("./Datasets/T91/T91_HR_Patches", 5000, bs = bs, downscale_factor = 3)
 
-#     show_tensor_as_image(xb[0])
-#     show_tensor_as_image(yb[0])
+lr = 0.0001
+model = SRCNN(scale=3)
+reset_parameters(model)
+opt = optim.SGD(model.parameters(), lr = lr, momentum=0.9)
 
-#     break
+epochs = 15
+loss_func = MSE
+fit(epochs, model, loss_func, opt, train_dl, val_dl)
 
-# img, label = dataset[0]
-# print(img.size)
+for xb, yb in train_dl:
+    show_tensor_as_image(model(xb[None, 0]))
+    show_tensor_as_image(yb[0])
+    break
 
-# train = "" # not defined yet
-# val = "" # not defined yet
-
-# lr = 0.01
-# model = SRCNN(scale=3)
-# opt = optim.SGD(model.parameters(), lr = lr, momentum=0.9)
-
-# epochs = 10
-# loss_func = MSE
-# fit(epochs, model, loss_func, opt, train, val)

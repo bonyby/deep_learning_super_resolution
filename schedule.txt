@@ -1,7 +1,7 @@
 Uge 43
 - (X) Opsætning af dataloader
 - (X) Pipeline for preprocessing af billeder (downscaling)
-- Træning med lille datasæt
+- (/) Træning med lille datasæt
 - Påbegynd pipeline for visualisering af resultater
     - Kig på PSNR (Peak Signal To Noise Ration: https://towardsdatascience.com/super-resolution-a-basic-study-e01af1449e13)
 
