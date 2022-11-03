@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import glob
 import torch.nn.functional as F
 import math
+import random
+import cv2
 
 from torchsummary import summary
 from torchvision import datasets
@@ -13,58 +15,109 @@ from torch import optim
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torch.utils.data import TensorDataset
+from torch.utils.data import Dataset
 from PIL import Image
+
 
 
 #https://github.com/yjn870/SRCNN-pytorch/blob/master/train.py
 #https://medium.com/coinmonks/review-srcnn-super-resolution-3cb3a4f67a7c
 
-
-def get_data():
-    print("wallah")
-    # Get data here
-
-
 #
+
+class ImageDataset(Dataset):
+    def __init__(self, imagesList_lr, imagesList_hr):
+        self.imagesList_lr = imagesList_lr
+        self.imagesList_hr = imagesList_hr
+    
+    def __len__(self):
+        return len(self.imagesList_lr)
+
+    def __getitem__(self, index):
+        return (
+            self.imagesList_lr[index],
+            self.imagesList_hr[index]
+        )
+
+
 def loss_batch(model, loss_func, xb, yb, opt=None):
-    loss = loss_func(model(xb), yb)
+    predictions_unclamped = model(xb.cuda())
+    loss = loss_func(predictions_unclamped, yb.cuda())
+    psnr = PSNRaccuracy(predictions_unclamped.clamp(0,1), yb.cuda())
 
     if opt is not None:
         loss.backward()
         opt.step()
         opt.zero_grad()
 
-    return loss.item(), len(xb)
+    return loss.item(), len(xb), psnr
 
 
 def fit(epochs, model, loss_func, opt, train_dl, valid_dl):
+    T = len(train_dl)
+    # Total number of batches
+    I = len(train_dl.dataset)
+  
+    print('Epochs:',epochs,'Total number of batches',T, 'Total number of elements', I)
+
+
+    psnr_history = []
+    t_counter = 0
+    t = []
+
     for epoch in range(epochs):
         model.train()  # Sets the mode of the model to training
-        for xb, yb in train_dl:
-            loss_batch(model, loss_func, xb, yb, opt)
+        #for xb, yb in train_dl:
+        #    loss_batch(model, loss_func, xb, yb, opt)
+        loss_losses, loss_nums, loss_psnrs = zip(
+             *[loss_batch(model, loss_func, xb, yb, opt) for xb, yb in train_dl]
+        )
+
+        train_loss = np.sum(np.multiply(loss_losses, loss_nums)) / np.sum(loss_nums)
+        train_psnr = np.sum(loss_psnrs) / len(loss_psnrs) # average PSNR per batch
 
         model.eval()  # Sets the mode of the model to evaluation
         with torch.no_grad():
-            losses, nums = zip(
+            losses, nums, val_psnrs = zip(
                 *[loss_batch(model, loss_func, xb, yb) for xb, yb in valid_dl]
             )
         val_loss = np.sum(np.multiply(losses, nums)) / np.sum(nums)
+        val_psnr = np.sum(val_psnrs) / len(val_psnrs) # average PSNR per batch
+        
+        psnr_history.append(val_psnr)
+        t_counter += 1
+        t.append(t_counter)
 
-        print("Epoch: " + str(epoch) + " Val loss: " + str(val_loss))
+        # print("Epoch: " + str(epoch) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
+        # print("Epoch: " + str(epoch) + " Train loss: " + str(train_loss) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
+        print("Epoch: " + str(epoch) + " Train loss: " + str(train_loss) + " Train PSNR: " + str(train_psnr) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
 
+        if epoch % 100 == 0:
+            # Save the model
+            print("Saving model weights...")
+            torch.save(model.state_dict(), "./Models/SRCNN.pth")
 
-# Function handle that returns an optimizer
-def basic_SGD(model,lr=0.0001, momentum=0.9):
-    return optim.SGD(model.parameters(), lr=lr,momentum=momentum)
+    plt.figure()
+    lines = []
+    labels = []
+    # l, = plt.plot(plot_time_train,train_loss_history)
+    # lines.append(l)
+    # labels.append('Training')
+    # l, = plt.plot(plot_time_valid,valid_loss_history)
+    # lines.append(l)
+    # labels.append('Validation')  
+    l, = plt.plot(t, psnr_history)
+    lines.append(l)
+    labels.append("PSNR")
+    plt.title('PSNR')
+    plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
+    plt.show()
+
 
 # Function handle that updates the learning rate
 # (note this is a dummy implementation that does nothing)
 def base_lr_scheduler(t,T,lr):
   return lr
-
-
-
-
 
 def fit2(model,
         trainset, 
@@ -91,11 +144,11 @@ def fit2(model,
     print("Yo im here")
     # Only use a subset of the data
     subset_indices = list(range(batches_per_epoch*bs))
-    train_dl = torch.utils.data.DataLoader(trainset, batch_size=bs, sampler=torch.utils.data.sampler.SubsetRandomSampler(subset_indices), num_workers=2)
+    train_dl = torch.utils.data.DataLoader(trainset, batch_size=bs, sampler=torch.utils.data.sampler.SubsetRandomSampler(subset_indices))
     print("HERRREREREROWAFA")
     # Use one fourth for validation
     subset_indices = list(range(int(np.ceil(batches_per_epoch/4))*bs))
-    valid_dl = torch.utils.data.DataLoader(testset, batch_size=bs, sampler=torch.utils.data.sampler.SubsetRandomSampler(subset_indices), num_workers=2)
+    valid_dl = torch.utils.data.DataLoader(testset, batch_size=bs, sampler=torch.utils.data.sampler.SubsetRandomSampler(subset_indices))
 
   # Initialize optimizer
   opt = opt_func(model)
@@ -187,20 +240,18 @@ def fit2(model,
 
   return train_loss_history
 
-
-
-
-
-
-
-
 def MSE(input, target):
     # Crop the target to the input size - the input loses some of it's size as the model doesn't use any padding
-    crop_transform = transforms.CenterCrop(input.size(dim=2))
+    crop_transform = transforms.CenterCrop(size=(input.size(dim=2), input.size(dim=3)))
     tgt = crop_transform(target)
-    # print("Size of tgt: " + str(tgt.size()))
-    # print("Size of input: " + str(input.size()))
-    
+
+    #print("Left top corner of target:" + str(target[0,1,6,6]))
+    #print("Right bottom corner of target:" + str(target[0,1,26,26]))
+
+    #print("Left top corner of tgt:" + str(tgt[0,1,0,0]))
+    #print("Right bottom corner of tgt:" + str(tgt[0,1,20,20]))
+    #show_tensor_as_image(input[None,0])
+    #show_tensor_as_image(tgt[None, 0])
     # loss = 0
     # bs = input.size(dim = 0)
     # for i in range(bs):
@@ -208,8 +259,8 @@ def MSE(input, target):
 
     # return loss / bs
 
-    mse = nn.MSELoss()
-    return mse(input, target)
+    mse = F.mse_loss
+    return mse(input, tgt)
 
 def MSE_Single(input, target):
     # Calculate MSE
@@ -246,7 +297,6 @@ def SRCNN(scale):
 
     return model
 
-
 class ModularSRCNN(nn.Module):
    
     def __init__(self):
@@ -267,6 +317,12 @@ class ModularSRCNN(nn.Module):
         self.conv3 = nn.Conv2d(n2, channels, (f3, f3))
         #self.relu3 = nn.ReLU()
 
+        self.params = nn.ModuleDict({
+            'conv12': nn.ModuleList([self.conv1, self.conv2]),
+            'conv3': nn.ModuleList([self.conv3])})
+
+
+
     def forward(self, x):
         x = self.conv1(x)
         x = self.relu1(x)
@@ -276,74 +332,54 @@ class ModularSRCNN(nn.Module):
         #x = self.relu3(x)
         return x
 
+# Function handle that returns an optimizer
+#We have learning rate 0.0001 for the first two layers and 0.00001 for the last layer
+def basic_SGD(model,lr=0.0001, momentum=0.9):
+    return optim.SGD([
+    {'params': model.params.conv12.parameters()},
+    {'params': model.params.conv3.parameters(), 'lr': 0.00001}
+], lr=lr,momentum=momentum)
+
+def adam_SGD(model, lr=0.0001):
+    return optim.Adam([
+    {'params': model.params.conv12.parameters()},
+    {'params': model.params.conv3.parameters(), 'lr': lr*0.1}
+], lr=lr)
+
+
 def reset_parameters(net):
     '''Init layer parameters.'''
     for m in net.modules():
         if isinstance(m, nn.Conv2d):
+            print("init'ing conv2d layer...")
+            #torch.nn.init.normal_(m.weight, mean=0.0, std=0.001)
             torch.nn.init.kaiming_normal_(m.weight)
             if m.bias is not None:
                 torch.nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.BatchNorm2d):
+        '''elif isinstance(m, nn.BatchNorm2d):
             torch.nn.init.constant_(m.weight, 1) # Why 1?
             torch.nn.init.constant_(m.bias, 0) # Why 0?
         elif isinstance(m, nn.Linear):
             torch.nn.init.kaiming_normal_(m.weight)
             if m.bias is not None:
-                torch.nn.init.constant_(m.bias, 0)
+                torch.nn.init.constant_(m.bias, 0)'''
 
-
-
-def get_tensor_images(path, n=-1, downscale_factor = 3):
-    images = []
-    downsampledImages = []
-    pil_tensor_converter = transforms.ToTensor()
-    gaussian_transform = transforms.GaussianBlur((3,3))
-
-    # Convert all images on the given path to tensors
-    counter = n
-    for f in glob.iglob(path + "/*"):
-        # Break if n images appended (if n = -1 - aka get all images - this never occurs)
-        if counter == 0:
-            break
-        im = Image.open(f)
-        #print("Image mode: " + str(im.mode)) - The images are RGB
-        img = pil_tensor_converter(im)
-        images.append(img)
-
-        counter -= 1
-
-    # Blur the input image (gaussian) and downsample
-    downsampledStack = torch.stack(images)
-    blurredImages = gaussian_transform(downsampledStack)
-    downsampledImages = F.interpolate(blurredImages, size=(blurredImages[0].size(dim=1) // downscale_factor, blurredImages[0].size(dim=2) // downscale_factor), mode="nearest")
-
-    imgStack = torch.stack(images)
-    return TensorDataset(downsampledImages, imgStack)
-
-def get_image_dataloaders(path, n=-1, bs=8, downscale_factor = 3):
-    train_dataset, test_dataset, val_dataset = get_image_sets(path, n, downscale_factor)
-    train_dl = DataLoader(train_dataset, batch_size=bs)
-    test_dl = DataLoader(test_dataset, batch_size=bs)
-    val_dl = DataLoader(val_dataset, batch_size=bs)
-
+def get_preprocessed_dataloaders(lowPath, highPath, n=-1, bs=8):
+    train_dataset, test_dataset, val_dataset = get_preprocessed_image_sets(lowPath, highPath, n)
+    train_dl = DataLoader(train_dataset, batch_size=bs, shuffle=True)
+    test_dl = DataLoader(test_dataset, batch_size=bs, shuffle=True)
+    val_dl = DataLoader(val_dataset, batch_size=bs, shuffle=True)
     return train_dl, test_dl, val_dl
 
-def show_tensor_as_image(tensor):
+def show_tensor_as_image(tensor, title=None):
     if tensor.ndimension() == 4:
         tensor = tensor[0]
 
     tensor_pil_converter = transforms.ToPILImage()
-    tensor_pil_converter(tensor).show()
-
-def show_cuda_tensor_as_image(tensor):
-    if tensor.ndimension() == 4:
-        tensor = tensor[0]
-
-    tensor_pil_converter = transforms.ToPILImage()
-    tensor_pil_converter(tensor).show()
+    tensor_pil_converter(tensor).show(title=title)
 
 def PSNRaccuracy(scores, yb, max_val=1):
-    crop_transform = transforms.CenterCrop(scores.size(dim=2))
+    crop_transform = transforms.CenterCrop(size = (scores.size(dim=2), scores.size(dim=3)))
     yb_cropped = crop_transform(yb)
 
     diff = scores - yb_cropped
@@ -363,25 +399,12 @@ def PSNRaccuracy(scores, yb, max_val=1):
     #preds = torch.argmax(score2prob(scores), dim=1)
     #return (preds == yb).float().mean()
 
-def get_image_sets(path, n=-1, downscale_factor = 3):
-    hr_patches = get_tensor_images(path, n, downscale_factor)
-    n = len(hr_patches)
-    
-    # Calculate the sizes of the data subsets
-    # We need to check the size difference to correct for rounding errors
-    trainSize = n*8//10
-    testSize = n//10
-    valSize = n//10
-    sizeDiff = trainSize + testSize + valSize - n
-    trainSize -= sizeDiff # correct for rounding errors
-    train_dataset, test_dataset, val_dataset = torch.utils.data.random_split(hr_patches, [trainSize, testSize, valSize])
-    return train_dataset, test_dataset, val_dataset
+
 
 
 def get_preprocessed_image_sets(path_low, path_high, n=-1): #This function works on preprocessed data
     dataset = get_tensor_images_high_low(path_low, path_high, n)
     n = len(dataset)
-    print("I'm here now 5")
     # Calculate the sizes of the data subsets
     # We need to check the size difference to correct for rounding errors
     trainSize = n*8//10
@@ -393,88 +416,143 @@ def get_preprocessed_image_sets(path_low, path_high, n=-1): #This function works
     return train_dataset, test_dataset, val_dataset
 
 
+def get_preprocessed_image_set(path_low, path_high, n=-1):
+    return get_tensor_images_high_low(path_low, path_high, n)
+
+def get_preprocessed_dataloader(lowPath, highPath, n=-1, bs=8):
+    dataset = get_preprocessed_image_set(lowPath, highPath, n)
+    train_dl = DataLoader(dataset, batch_size=bs, shuffle=True)
+    return train_dl
 
 def get_tensor_images_high_low(path_low, path_high, n=-1): #This function works on preprocessed data
     images_low = []
     images_high = []
     pil_tensor_converter = transforms.ToTensor()
-    print("I'm here now 1")
     # Convert all images on the given path to tensors
     counter_low = n
     for f in sorted(glob.iglob(path_low + "/*")):
         # Break if n images appended (if n = -1 - aka get all images - this never occurs)
+
         if counter_low == 0:
             break
-        if counter_low == -1000:
-            name = (f.split("\\")[1]).split(".")[0]
-            print("The name: " + name)
         im = Image.open(f)
-        #print("Image mode: " + str(im.mode)) - The images are RGB
         img = pil_tensor_converter(im)
         images_low.append(img)
         counter_low -= 1
 
+        #print("Image mode: " + str(im.mode))
+        #print("The values of image:" + str(img))
 
-    print("I'm here now 2")
+    print("Done with lowres...")
     counter_high= n
     for f in sorted(glob.iglob(path_high + "/*")):
         # Break if n images appended (if n = -1 - aka get all images - this never occurs)
         if counter_high == 0:
             break
-        if counter_high == -1000:
-            name = (f.split("\\")[1]).split(".")[0]
-            print("The name: " + name)
         im = Image.open(f)
         #print("Image mode: " + str(im.mode)) - The images are RGB
         img = pil_tensor_converter(im)
         images_high.append(img)
 
         counter_high -= 1
-    print("I'm here now 3")
-    low_res_stack = torch.stack(images_low)
-    high_res_stack = torch.stack(images_high)
+    print("Done with highres...")
+    # low_res_stack = torch.stack(images_low)
+    # high_res_stack = torch.stack(images_high)
     
-    print("I'm here now 4")
-    return TensorDataset(low_res_stack, high_res_stack)
+    # return TensorDataset(low_res_stack, high_res_stack)
+    return ImageDataset(images_low, images_high)
+
+def get_random_images_for_prediction(n=1):
+    # path = "./Datasets/T91/T91_Original/*"
+    path = "./Datasets/Set19/Original/*"
+    files = [f for f in glob.iglob(path)]
+    random.shuffle(files)
+
+    upscaled_imgs = []
+    original_imgs = []
+
+    tensor_transform = transforms.ToTensor()
+
+    counter = 0
+    
+    for f in files:
+
+        if counter >= n:
+            break
+        pic = Image.open(f)
+        img = np.array(pic)
+
+        h, w, _ = img.shape
+        low_res_img = cv2.resize(img, (int(w*1/3), int(h*1/3)), interpolation=cv2.INTER_CUBIC)
+        high_res_upscale = cv2.resize(low_res_img, (w, h), 
+                                            interpolation=cv2.INTER_CUBIC)
+
+        upscaled_imgs.append(tensor_transform(high_res_upscale))
+        original_imgs.append(tensor_transform(img))
+
+        counter += 1
+
+    # img_dl = TensorDataset(torch.stack(upscaled_imgs), torch.stack(original_imgs))
+    img_dl = ImageDataset(upscaled_imgs, original_imgs)
+    return DataLoader(img_dl, batch_size=1, shuffle=True)
 
 # ------------------- CODE -------------------
 def main():
     bs = 128
-    train_dl, test_dl, val_dl = get_image_dataloaders("./Datasets/T91/T91_HR_Patches", 1000, bs = bs, downscale_factor = 3)
+    epochs = 1000
 
+    #train_dl, test_dl, val_dl = get_preprocessed_dataloaders("./Datasets/T91/T91_Upscaled_Patches", "./Datasets/T91/T91_HR_Patches", bs = bs)
+    #training, validation, testing  = get_preprocessed_image_sets("./Datasets/T91/T91_Upscaled_Patches", "./Datasets/T91/T91_HR_Patches", n=100)
+
+    train_dl = get_preprocessed_dataloader("./Datasets/T91/T91_Upscaled_Patches", "./Datasets/T91/T91_HR_Patches", bs = bs)
+    test_dl = get_preprocessed_dataloader("./Datasets/Set19/Blurred", "./Datasets/Set19/Original", bs = 1)
     
-    training, validation, testing  = get_preprocessed_image_sets("./Datasets/T91/T91_Upscaled_Patches", "./Datasets/T91/T91_HR_Patches")
-
-
-    #training, validation, testing = get_image_sets("./Datasets/T91/T91_HR_Patches", downscale_factor = 3)
-    lr = 0.0001
-
     model = ModularSRCNN().cuda()
-
+    loss_func = MSE
     reset_parameters(model)
 
+    optim = adam_SGD(model, lr=0.001)
+    fit(epochs, model, loss_func, optim, train_dl, test_dl)
 
-    epochs = 50
-    loss_func = MSE
+    # # # Save the model
+    print("Saving model after training")
+    torch.save(model.state_dict(), "./Models/SRCNN.pth")
+
+    # model.load_state_dict(torch.load("./Models/SRCNN.pth"))
+
+    # dl = get_random_images_for_prediction()
+
+    # model.eval()
+    # for xb, yb in dl:
+    #     blurred = xb.cuda()[None, 0]
+    #     result = model(blurred).clamp(0, 1)
+
+    #     show_tensor_as_image(result, "result")
+    #     show_tensor_as_image(yb[0], "original")
+    #     show_tensor_as_image(blurred, "blurred")
 
 
 
-    fit2(model, training, validation, loss_func, PSNRaccuracy, basic_SGD, bs=bs, epochs=epochs)
-    counter = 4
-    for xb, yb in train_dl:
-        if(counter == 0):
-            break
-        #print(xb.cuda()[None,0].max())
-        model.eval()
-        result = model(xb.cuda()[None, 0])
-        show_tensor_as_image(result)
-        print("result size: " + str(result.size()))
-        crop_transform = transforms.CenterCrop(result.size(dim=2))
-        tgt = crop_transform(yb.cuda()[0])
-        print("tgt size: " + str(tgt.size()))
 
-        show_tensor_as_image(tgt)
-        counter -= 1
+    # fit2(model, training, validation, loss_func, PSNRaccuracy, basic_SGD, bs=bs, epochs=epochs)
+
+    
+
+    # counter = 4
+    # for xb, yb in train_dl:
+    #     if(counter == 0):
+    #         break
+    #     print(str(xb.cuda()[None,0].size()))
+    #     model.eval()
+    #     result = model(xb.cuda()[None, 0])
+    #     show_tensor_as_image(result)
+    #     print("result size: " + str(result.size()))
+    #     crop_transform = transforms.CenterCrop(result.size(dim=2))
+    #     tgt = crop_transform(yb.cuda()[0])
+    #     print("tgt size: " + str(tgt.size()))
+
+    #     show_tensor_as_image(tgt)
+    #     counter -= 1
 
 
 if __name__ == "__main__":

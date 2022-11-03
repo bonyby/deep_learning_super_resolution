@@ -16,3 +16,10 @@
 
 Spørgsmål:
 - Datasets i collab? https://stackoverflow.com/questions/71619540/how-to-upload-a-62-gb-datasets-to-google-colab
+
+
+
+Useful links:
+https://github.com/yjn870/SRCNN-pytorch
+
+https://debuggercafe.com/srcnn-implementation-in-pytorch-for-image-super-resolution/
