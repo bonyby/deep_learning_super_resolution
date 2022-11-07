@@ -92,7 +92,7 @@ def fit(epochs, model, loss_func, opt, train_dl, valid_dl):
         # print("Epoch: " + str(epoch) + " Train loss: " + str(train_loss) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
         print("Epoch: " + str(epoch) + " Train loss: " + str(train_loss) + " Train PSNR: " + str(train_psnr) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
 
-        if epoch % 100 == 0:
+        if epoch % 100 == 0 and epoch != 0:
             # Save the model
             print("Saving model weights...")
             torch.save(model.state_dict(), "./Models/SRCNN.pth")
@@ -321,8 +321,6 @@ class ModularSRCNN(nn.Module):
             'conv12': nn.ModuleList([self.conv1, self.conv2]),
             'conv3': nn.ModuleList([self.conv3])})
 
-
-
     def forward(self, x):
         x = self.conv1(x)
         x = self.relu1(x)
@@ -330,6 +328,13 @@ class ModularSRCNN(nn.Module):
         x = self.relu2(x)
         x = self.conv3(x)
         #x = self.relu3(x)
+        return x
+
+class BicubicBaseline(nn.Module):
+    def __init__(self):
+        super(BicubicBaseline, self).__init__()
+
+    def forward(self, x):
         return x
 
 # Function handle that returns an optimizer
@@ -345,6 +350,7 @@ def adam_SGD(model, lr=0.0001):
     {'params': model.params.conv12.parameters()},
     {'params': model.params.conv3.parameters(), 'lr': lr*0.1}
 ], lr=lr)
+
 
 
 def reset_parameters(net):
@@ -462,7 +468,7 @@ def get_tensor_images_high_low(path_low, path_high, n=-1): #This function works 
     # return TensorDataset(low_res_stack, high_res_stack)
     return ImageDataset(images_low, images_high)
 
-def get_random_images_for_prediction(n=1):
+def get_random_images_for_prediction(n=1, scale=3):
     # path = "./Datasets/T91/T91_Original/*"
     path = "./Datasets/Set19/Original/*"
     files = [f for f in glob.iglob(path)]
@@ -483,7 +489,7 @@ def get_random_images_for_prediction(n=1):
         img = np.array(pic)
 
         h, w, _ = img.shape
-        low_res_img = cv2.resize(img, (int(w*1/3), int(h*1/3)), interpolation=cv2.INTER_CUBIC)
+        low_res_img = cv2.resize(img, (int(w*1/scale), int(h*1/scale)), interpolation=cv2.INTER_CUBIC)
         high_res_upscale = cv2.resize(low_res_img, (w, h), 
                                             interpolation=cv2.INTER_CUBIC)
 
@@ -499,18 +505,23 @@ def get_random_images_for_prediction(n=1):
 # ------------------- CODE -------------------
 def main():
     bs = 128
-    epochs = 1000
+    epochs = 200
 
     #train_dl, test_dl, val_dl = get_preprocessed_dataloaders("./Datasets/T91/T91_Upscaled_Patches", "./Datasets/T91/T91_HR_Patches", bs = bs)
     #training, validation, testing  = get_preprocessed_image_sets("./Datasets/T91/T91_Upscaled_Patches", "./Datasets/T91/T91_HR_Patches", n=100)
 
     train_dl = get_preprocessed_dataloader("./Datasets/T91/T91_Upscaled_Patches", "./Datasets/T91/T91_HR_Patches", bs = bs)
     test_dl = get_preprocessed_dataloader("./Datasets/Set19/Blurred", "./Datasets/Set19/Original", bs = 1)
+
+    #train_dlx2 = get_preprocessed_dataloader("./Datasets/T91/T91_Upscaled_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", bs = bs)
+    #test_dlx2 = get_preprocessed_dataloader("./Datasets/Set19/Blurred_x2", "./Datasets/Set19/Original", bs = 1)
     
     model = ModularSRCNN().cuda()
+    #model = BicubicBaseline().cuda()
     loss_func = MSE
     reset_parameters(model)
 
+    #model.load_state_dict(torch.load("./Models/SRCNN.pth"))
     optim = adam_SGD(model, lr=0.001)
     fit(epochs, model, loss_func, optim, train_dl, test_dl)
 
@@ -518,18 +529,17 @@ def main():
     print("Saving model after training")
     torch.save(model.state_dict(), "./Models/SRCNN.pth")
 
-    # model.load_state_dict(torch.load("./Models/SRCNN.pth"))
 
-    # dl = get_random_images_for_prediction()
+    dl = get_random_images_for_prediction(scale=3)
 
-    # model.eval()
-    # for xb, yb in dl:
-    #     blurred = xb.cuda()[None, 0]
-    #     result = model(blurred).clamp(0, 1)
+    model.eval()
+    for xb, yb in dl:
+        blurred = xb.cuda()[None, 0]
+        result = model(blurred).clamp(0, 1)
 
-    #     show_tensor_as_image(result, "result")
-    #     show_tensor_as_image(yb[0], "original")
-    #     show_tensor_as_image(blurred, "blurred")
+        show_tensor_as_image(result, "result")
+        show_tensor_as_image(yb[0], "original")
+        show_tensor_as_image(blurred, "blurred")
 
 
 
