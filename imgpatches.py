@@ -49,12 +49,15 @@ def makeBlurredImages(imagesPath, blurredPath):
         low_res_img = cv2.resize(
             img, (int(w*1/3), int(h*1/3)), interpolation=cv2.INTER_CUBIC)
 
-        high_res_upscale = cv2.resize(
-            low_res_img, (w, h), interpolation=cv2.INTER_CUBIC)
+        #high_res_upscale = cv2.resize(
+        #    low_res_img, (w, h), interpolation=cv2.INTER_CUBIC)
 
-        high_res_upscale_PIL = Image.fromarray(high_res_upscale)
-        high_res_upscale_PIL.save(
-            "./Datasets/" + blurredPath + "/" + name + "_blurred_" + ".png")
+        # high_res_upscale_PIL = Image.fromarray(high_res_upscale)
+        # high_res_upscale_PIL.save(
+        #     "./Datasets/" + blurredPath + "/" + name + "_blurred_" + ".png")
+        low_res_upscale_PIL = Image.fromarray(low_res_img)
+        low_res_upscale_PIL.save(
+            "./Datasets/" + blurredPath + "/" + name + "_LR" + ".png")
 
 
 
@@ -72,12 +75,16 @@ def makeBlurredImagesx2(imagesPath, blurredPath):
         low_res_img = cv2.resize(
             img, (int(w*1/2), int(h*1/2)), interpolation=cv2.INTER_CUBIC)
 
-        high_res_upscale = cv2.resize(
-            low_res_img, (w, h), interpolation=cv2.INTER_CUBIC)
+        # high_res_upscale = cv2.resize(
+        #     low_res_img, (w, h), interpolation=cv2.INTER_CUBIC)
 
-        high_res_upscale_PIL = Image.fromarray(high_res_upscale)
-        high_res_upscale_PIL.save(
-            "./Datasets/" + blurredPath + "/" + name + "_blurred_" + ".png")
+        # high_res_upscale_PIL = Image.fromarray(high_res_upscale)
+        # high_res_upscale_PIL.save(
+        #     "./Datasets/" + blurredPath + "/" + name + "_blurred_" + ".png")
+
+        low_res_upscale_PIL = Image.fromarray(low_res_img)
+        low_res_upscale_PIL.save(
+            "./Datasets/" + blurredPath + "/" + name + "_LR" + ".png")
 
 
 def makeDatasetIntoPatchDatasetx3(datasetPath, newPatchesPath, lowResPath, highResPath):
@@ -156,8 +163,8 @@ def makeDatasetIntoPatchDatasetx2(datasetPath, newPatchesPath, lowResPath, highR
 #makeDatasetIntoPatches("T91/T91_Original", "T91/T91_HR_Patches")
 #makeLowAndHighResPatches("T91/T91_HR_Patches", "T91/T91_LR_Patches", "T91/T91_Upscaled_Patches")
 #makeDatasetIntoPatchDataset("T91/T91_Original", "T91/T91_HR_Patches", "T91/T91_LR_Patches", "T91/T91_Upscaled_Patches")
-#makeBlurredImages("Set5/Original", "Set5/Blurred")
-#makeBlurredImagesx2("Set19/Original", "Set19/Blurred_x2")
+# makeBlurredImages("Set19/Original", "Set19/LR")
+makeBlurredImagesx2("Set19/Original", "Set19/LR_x2")
 
 #makeDatasetIntoPatchDatasetx2("T91/T91_Original", "T91/T91_HR_Patches_x2", "T91/T91_LR_Patches_x2", "T91/T91_Upscaled_Patches_x2")
 
