@@ -52,13 +52,12 @@ def loss_batch(model, loss_func, xb, yb, opt=None):
     return loss.item(), len(xb), psnr
 
 
-def fit(epochs, model, loss_func, opt, train_dl, valid_dl):
-    T = len(train_dl)
+def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN"):
+    num_batches = len(train_dl)
     # Total number of batches
-    I = len(train_dl.dataset)
+    num_elements = len(train_dl.dataset)
 
-    print('Epochs:', epochs, 'Total number of batches',
-          T, 'Total number of elements', I)
+    print('Epochs:', epochs, 'Total number of batches', num_batches, 'Total number of elements', num_elements)
 
     psnr_history = []
     t_counter = 0
@@ -94,10 +93,10 @@ def fit(epochs, model, loss_func, opt, train_dl, valid_dl):
         print("Epoch: " + str(epoch) + " Train loss: " + str(train_loss) + " Train PSNR: " +
               str(train_psnr) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
 
-        if epoch % 100 == 0 and epoch != 0:
+        if (epoch + 1) % 100 == 0:
             # Save the model
             print("Saving model weights...")
-            torch.save(model.state_dict(), "./Models/SRCNN.pth")
+            torch.save(model.state_dict(), "./Models/" + save_path + ".pth")
 
     plt.figure()
     lines = []
@@ -122,41 +121,59 @@ def base_lr_scheduler(t, T, lr):
     return lr
 
 
+def PSNRaccuracy(scores, yb, max_val=1):
+    crop_transform = transforms.CenterCrop(
+        size=(scores.size(dim=2), scores.size(dim=3)))
+    yb_cropped = crop_transform(yb)
+
+    diff = scores - yb_cropped
+    diff_flat = torch.flatten(diff, start_dim=1)
+
+    rmse = torch.sqrt(torch.mean(torch.square(diff_flat)))
+    # 10 * log_10(MAX_I^2/MSE)
+    # divres = 1/mse
+    # logres = torch.log10(divres)
+    # mulres = 10 * logres
+    # return mulres
+
+    return Tensor([20 * math.log(max_val/rmse, 10)])
+
+    # return Tensor([0.5])
+    #score2prob = nn.Softmax(dim=1)
+    #preds = torch.argmax(score2prob(scores), dim=1)
+    # return (preds == yb).float().mean()
+
+#fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN")
 def fit2(model,
+         loss_func,
+         opt,
          trainset,
          testset,
-         loss_func,
-         accuracy,
-         opt_func,
+         epochs=1,
+         accuracy=PSNRaccuracy,
          batch_prints=False,
          lr_scheduler=base_lr_scheduler,
-         bs=256,
-         epochs=1,
          batches_per_epoch=None,  # Default: Use entire training set
          show_summary=True):
+
+    bs = trainset.batch_size
 
     # Set up data loaders
     if batches_per_epoch == None:
         # Use all images
-        train_dl = torch.utils.data.DataLoader(trainset, batch_size=bs,
-                                               shuffle=True, num_workers=2)
-        valid_dl = torch.utils.data.DataLoader(testset, batch_size=bs,
-                                               shuffle=False, num_workers=2)
+        train_dl = trainset
+        #torch.utils.data.DataLoader(trainset, batch_size=bs,  shuffle=True, num_workers=2)
+        valid_dl = testset
+        #torch.utils.data.DataLoader(testset, batch_size=bs, shuffle=False, num_workers=2)
         batches_per_epoch = len(train_dl)
     else:
         print("Yo im here")
         # Only use a subset of the data
         subset_indices = list(range(batches_per_epoch*bs))
-        train_dl = torch.utils.data.DataLoader(
-            trainset, batch_size=bs, sampler=torch.utils.data.sampler.SubsetRandomSampler(subset_indices))
-        print("HERRREREREROWAFA")
-        # Use one fourth for validation
-        subset_indices = list(range(int(np.ceil(batches_per_epoch/4))*bs))
-        valid_dl = torch.utils.data.DataLoader(
-            testset, batch_size=bs, sampler=torch.utils.data.sampler.SubsetRandomSampler(subset_indices))
+        dataset = trainset.dataset        
+        train_dl = DataLoader(dataset, batch_size=bs, sampler=torch.utils.data.sampler.SubsetRandomSampler(subset_indices), shuffle=True)
+        valid_dl = testset
 
-    # Initialize optimizer
-    opt = opt_func(model)
 
     # For book keeping
     train_loss_history = []
@@ -377,19 +394,33 @@ class ModularFSRCNN(nn.Module):
         self.relum3 = nn.PReLU()
         self.convm4 = nn.Conv2d(s, s, (3, 3), padding=1)
         self.relum4 = nn.PReLU()
+        self.convm5 = nn.Conv2d(s, s, (3, 3), padding=1)
+        self.relum5 = nn.PReLU()
+        self.convm6 = nn.Conv2d(s, s, (3, 3), padding=1)
+        self.relum6 = nn.PReLU()
+
 
         # Expansion
         self.conv3 = nn.Conv2d(s, d, (1, 1))
         self.relu3 = nn.PReLU()
 
         # Deconvolution
-        self.deconv = nn.ConvTranspose2d(d, 3, (9, 9), stride=scale)
+        #ConvTranspose2d(in_channels, out_channels, kernel_size, padding, stride)
+        #Takes input of size nxn. From this, it takes the (k x k) kernel and uses it for each value in the nxn input
+        #If stride is 3, with kernel size (9,9), it means that we make a new matrix where we start in the top corner
+        #making a 9x9 matrix. Then we slide by 3 to the right, and we now have a 12x9 matrix. This means we get 9+(n-1)x3 size in total (we don't slide for the first of the n values)
+        #If we add padding=3 it means we treat a 3x3 border around the result as not part of the result. It makes sense since 3 results on either side will not be an overlay of three inputs with the filter.  
+        self.deconv = nn.ConvTranspose2d(d, 3, (9, 9), padding=scale, stride=scale)
 
         self.params = nn.ModuleDict({
-            'convs': nn.ModuleList([self.conv1, self.conv2, self.convm1, self.convm2, self.convm3, self.convm4, self.conv3]),
-            'deconvs': nn.ModuleList([self.deconv])})
+           'convs': nn.ModuleList([self.conv1, self.conv2, self.convm1, self.convm2, self.convm3, self.convm4, self.convm5, self.convm6, self.conv3]),
+           'deconvs': nn.ModuleList([self.deconv])})
+        # self.params = nn.ModuleDict({
+        #    'convs': nn.ModuleList([]),
+        #    'deconvs': nn.ModuleList([])})
 
     def forward(self, x):
+        #print("x init size: " + str(x.size()))
         # Feature extraction
         x = self.conv1(x)
         x = self.relu1(x)
@@ -407,6 +438,10 @@ class ModularFSRCNN(nn.Module):
         x = self.relum3(x)
         x = self.convm4(x)
         x = self.relum4(x)
+        x = self.convm5(x)
+        x = self.relum5(x)
+        x = self.convm6(x)
+        x = self.relum6(x)
 
         # Expansion
         x = self.conv3(x)
@@ -414,22 +449,23 @@ class ModularFSRCNN(nn.Module):
 
         # Deconvolution
         x = self.deconv(x)
+        #print("x after deconv size: " + str(x.size()))
 
         return x
 
 
-def setupSRCNN(load_model=False, load_path="./Models/SRCNN.pth", lr=0.001):
+def setupSRCNN(load_model=False, load_path="SRCNN", lr=0.001):
     model = ModularSRCNN().cuda()
 
     if load_model:
-        model.load_state_dict(torch.load(load_path))
+        model.load_state_dict(torch.load("./Models/"+ load_path + ".pth" ))
     else:
         reset_parameters(model)
 
     loss_func = MSE
     optim = adam_SGD(model, lr=lr)
 
-    return model, loss_func, optim
+    return model, loss_func, optim, load_path
 
 
 def loadSRCNNdata(bs=128, n=-1, scale=3):
@@ -437,7 +473,7 @@ def loadSRCNNdata(bs=128, n=-1, scale=3):
         train_dl = get_preprocessed_dataloader(
             "./Datasets/T91/T91_Upscaled_Patches", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
         test_dl = get_preprocessed_dataloader(
-            "./Datasets/Set19/Blurred", "./Datasets/Set19/Original", bs=1)
+            "./Datasets/Set19/BlurredCropx3", "./Datasets/Set19/Original", bs=1)
     elif(scale == 2):
         train_dl = get_preprocessed_dataloader(
             "./Datasets/T91/T91_Upscaled_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs)
@@ -446,18 +482,18 @@ def loadSRCNNdata(bs=128, n=-1, scale=3):
     return train_dl, test_dl
 
 
-def setupFSRCNN(load_model=False, load_path="./Models/FSRCNN.pth", lr=0.001):
+def setupFSRCNN(load_model=False, load_path="FSRCNN", lr=0.001):
     model = ModularFSRCNN().cuda()
 
     if load_model:
-        model.load_state_dict(torch.load(load_path))
+        model.load_state_dict(torch.load("./Models/"+ load_path + ".pth" ))
     else:
         reset_parameters(model)
 
     loss_func = MSE
     optim = adam_SGD_faster(model, lr=lr)
 
-    return model, loss_func, optim
+    return model, loss_func, optim, load_path
 
 
 def loadFSRCNNdata(bs=128, n=-1, scale=3):
@@ -465,12 +501,12 @@ def loadFSRCNNdata(bs=128, n=-1, scale=3):
         train_dl = get_preprocessed_dataloader(
             "./Datasets/T91/T91_LR_Patches", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
         test_dl = get_preprocessed_dataloader(
-            "./Datasets/Set19/LR", "./Datasets/Set19/Original", bs=1)
+            "./Datasets/Set19/LRCropx3", "./Datasets/Set19/OriginalCropx3", bs=1, shuffle=False)
     elif(scale == 2):
         train_dl = get_preprocessed_dataloader(
             "./Datasets/T91/T91_LR_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs)
         test_dl = get_preprocessed_dataloader(
-            "./Datasets/Set19/LR_x2", "./Datasets/Set19/Original", bs=1)
+            "./Datasets/Set19/LR_x2", "./Datasets/Set19/Original", bs=1, shuffle=False)
     return train_dl, test_dl
 
 
@@ -511,7 +547,7 @@ def reset_parameters(net):
     for m in net.modules():
         if isinstance(m, nn.Conv2d):
             print("init'ing conv2d layer...")
-            #torch.nn.init.normal_(m.weight, mean=0.0, std=0.001)
+            #torch.nn.init.normal_(m.weight, mean=0, std=0.001)
             torch.nn.init.kaiming_normal_(m.weight)
             if m.bias is not None:
                 torch.nn.init.constant_(m.bias, 0)
@@ -544,29 +580,6 @@ def show_tensor_as_image(tensor, title=None):
     tensor_pil_converter(tensor).show(title=title)
 
 
-def PSNRaccuracy(scores, yb, max_val=1):
-    crop_transform = transforms.CenterCrop(
-        size=(scores.size(dim=2), scores.size(dim=3)))
-    yb_cropped = crop_transform(yb)
-
-    diff = scores - yb_cropped
-    diff_flat = torch.flatten(diff, start_dim=1)
-
-    rmse = torch.sqrt(torch.mean(torch.square(diff_flat)))
-    # 10 * log_10(MAX_I^2/MSE)
-    # divres = 1/mse
-    # logres = torch.log10(divres)
-    # mulres = 10 * logres
-    # return mulres
-
-    return Tensor([20 * math.log(max_val/rmse, 10)])
-
-    # return Tensor([0.5])
-    #score2prob = nn.Softmax(dim=1)
-    #preds = torch.argmax(score2prob(scores), dim=1)
-    # return (preds == yb).float().mean()
-
-
 # This function works on preprocessed data
 def get_preprocessed_image_sets(path_low, path_high, n=-1):
     dataset = get_tensor_images_high_low(path_low, path_high, n)
@@ -587,9 +600,9 @@ def get_preprocessed_image_set(path_low, path_high, n=-1):
     return get_tensor_images_high_low(path_low, path_high, n)
 
 
-def get_preprocessed_dataloader(lowPath, highPath, n=-1, bs=8):
+def get_preprocessed_dataloader(lowPath, highPath, n=-1, bs=8, shuffle=True):
     dataset = get_preprocessed_image_set(lowPath, highPath, n)
-    train_dl = DataLoader(dataset, batch_size=bs, shuffle=True)
+    train_dl = DataLoader(dataset, batch_size=bs, shuffle=shuffle)
     return train_dl
 
 
@@ -634,7 +647,7 @@ def get_tensor_images_high_low(path_low, path_high, n=-1):
 
 def get_random_images_for_prediction(n=1, scale=3):
     # path = "./Datasets/T91/T91_Original/*"
-    path = "./Datasets/Set19/Original/*"
+    path = "./Datasets/Set19/OriginalCropx3/*"
     files = [f for f in glob.iglob(path)]
     random.shuffle(files)
 
@@ -680,61 +693,35 @@ def main():
     bs = 128
     epochs = 200
 
-    # train_dl, test_dl = loadFSRCNNdata(bs=bs)
-    modelFSRCNN, loss_func, optim = setupFSRCNN(load_model = True, lr=0.001)
-    #fit(epochs, modelFSRCNN, loss_func, optim, train_dl, test_dl)
+    train_dl, test_dl = loadFSRCNNdata(bs=bs)
+    model, loss_func, optim, load_path = setupFSRCNN(load_model=False, lr=0.001, load_path="DeeperFSRCNN")
+    #summary(model, input_size=(3,11,11))
+    
+    #model = BicubicBaseline().cuda()
+    fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path)
+    
+    #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs)
 
-    # # # Save the model
-    # print("Saving model after training")
-    # torch.save(modelFSRCNN.state_dict(), "./Models/FSRCNN.pth")
 
     lr_dl, upscaled_dl = get_random_images_for_prediction(scale=3)
 
-    modelFSRCNN.eval()
+    model.eval()
     for xb, yb in lr_dl:
         input = xb.cuda()[None, 0]
-        result = modelFSRCNN(input).clamp(0, 1)
-
-        show_tensor_as_image(result, "result")
+        result = model(input)
+        clampedResult = result.clamp(0, 1)
+        #print("result size: " + str(result.size()))
+        #print("original size: " + str(yb[0].size()))
+        #print("Result values: " + str(result))
+        show_tensor_as_image(clampedResult, "result")
         show_tensor_as_image(yb[0], "original")
         show_tensor_as_image(input, "input")
-    
+        
     for xb, yb in upscaled_dl:
         blurred = xb.cuda()[None, 0]
 
         show_tensor_as_image(blurred, "blurred")
 
-    # fit2(model, training, validation, loss_func, PSNRaccuracy, basic_SGD, bs=bs, epochs=epochs)
-
-    # counter = 4
-    # for xb, yb in train_dl:
-    #     if(counter == 0):
-    #         break
-    #     print(str(xb.cuda()[None,0].size()))
-    #     model.eval()
-    #     result = model(xb.cuda()[None, 0])
-    #     show_tensor_as_image(result)
-    #     print("result size: " + str(result.size()))
-    #     crop_transform = transforms.CenterCrop(result.size(dim=2))
-    #     tgt = crop_transform(yb.cuda()[0])
-    #     print("tgt size: " + str(tgt.size()))
-
-    #     show_tensor_as_image(tgt)
-    #     counter -= 1
 if __name__ == "__main__":
     main()
 
-    '''
-    def fit(model,
-            trainset, 
-            testset,
-            loss_func,
-            accuracy,
-            opt_func,
-            batch_prints=False,
-            lr_scheduler=base_lr_scheduler,
-            bs=256,
-            epochs=1, 
-            batches_per_epoch=None, # Default: Use entire training set
-            show_summary=True):
-            '''

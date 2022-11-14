@@ -3,6 +3,7 @@ import glob
 from PIL import Image
 from patchify import patchify
 import cv2
+import math
 
 # image = Image.open("./Datasets/T91/T91_Original/t1.png")
 # img = np.array(image)
@@ -35,7 +36,8 @@ def makeDatasetIntoPatches(datasetPath, newPatchesPath):
                            name + "_" + str(counter) + ".png")
 
 
-def makeBlurredImages(imagesPath, blurredPath):
+#Takes scale as input
+def makeBlurredImages(imagesPath, croppedPath, downscaledPath, blurredPath, scale):
     images = []
 
     for f in glob.iglob("./Datasets/" + imagesPath + "/*"):
@@ -45,49 +47,33 @@ def makeBlurredImages(imagesPath, blurredPath):
 
     for image in images:
         (name, img) = image
+
         h, w, _ = img.shape
+
+        #Cropping pictures to nearest modulo "scale" (lower than) so that everything rounds perfectly with x"scale" scaling
+        newh = nearestRound(h, scale)
+        neww = nearestRound(w, scale)
+        img = crop_center(img, neww, newh)
+
+        #Saving cropped images
+        crop_PIL = Image.fromarray(img)
+        crop_PIL.save("./Datasets/Set19/" + croppedPath + "/" + name + ".png")
+
         low_res_img = cv2.resize(
-            img, (int(w*1/3), int(h*1/3)), interpolation=cv2.INTER_CUBIC)
+            img, (int(w*1/scale), int(h*1/scale)), interpolation=cv2.INTER_CUBIC)
 
-        #high_res_upscale = cv2.resize(
-        #    low_res_img, (w, h), interpolation=cv2.INTER_CUBIC)
+        high_res_upscale = cv2.resize(
+           low_res_img, (neww, newh), interpolation=cv2.INTER_CUBIC)
 
-        # high_res_upscale_PIL = Image.fromarray(high_res_upscale)
-        # high_res_upscale_PIL.save(
-        #     "./Datasets/" + blurredPath + "/" + name + "_blurred_" + ".png")
+        high_res_upscale_PIL = Image.fromarray(high_res_upscale)
+        high_res_upscale_PIL.save(
+            "./Datasets/Set19/"+ blurredPath +"/"+ name + "_blurred_" + ".png")
         low_res_upscale_PIL = Image.fromarray(low_res_img)
-        low_res_upscale_PIL.save(
-            "./Datasets/" + blurredPath + "/" + name + "_LR" + ".png")
+        low_res_upscale_PIL.save( "./Datasets/" + downscaledPath + "/" + name + "_LR" + ".png")
 
 
 
-def makeBlurredImagesx2(imagesPath, blurredPath):
-    images = []
-
-    for f in glob.iglob("./Datasets/" + imagesPath + "/*"):
-        # remove path before file name and file extension
-        name = (f.split("\\")[1]).split(".")[0]
-        images.append((name, np.array(Image.open(f))))
-
-    for image in images:
-        (name, img) = image
-        h, w, _ = img.shape
-        low_res_img = cv2.resize(
-            img, (int(w*1/2), int(h*1/2)), interpolation=cv2.INTER_CUBIC)
-
-        # high_res_upscale = cv2.resize(
-        #     low_res_img, (w, h), interpolation=cv2.INTER_CUBIC)
-
-        # high_res_upscale_PIL = Image.fromarray(high_res_upscale)
-        # high_res_upscale_PIL.save(
-        #     "./Datasets/" + blurredPath + "/" + name + "_blurred_" + ".png")
-
-        low_res_upscale_PIL = Image.fromarray(low_res_img)
-        low_res_upscale_PIL.save(
-            "./Datasets/" + blurredPath + "/" + name + "_LR" + ".png")
-
-
-def makeDatasetIntoPatchDatasetx3(datasetPath, newPatchesPath, lowResPath, highResPath):
+def makeDatasetIntoPatchDataset(datasetPath, newPatchesPath, lowResPath, highResPath, scale):
     images = []
     # Get names of all image files in dataset and save the images as np arrays
     for f in sorted(glob.iglob("./Datasets/" + datasetPath + "/*")):
@@ -95,9 +81,17 @@ def makeDatasetIntoPatchDatasetx3(datasetPath, newPatchesPath, lowResPath, highR
         name = (f.split("\\")[1]).split(".")[0]
         images.append((name, np.array(Image.open(f))))
 
+    if scale == 3:
+        patchSize = 33
+    elif scale == 2:
+        patchSize == 32
+    else:
+        print("Error: Undefined dimensions for this scaling")
+        return
+
     for image in images:
         (name, img) = image
-        patches = patchify(img, (33, 33, 3), step=14)
+        patches = patchify(img, (patchSize, patchSize, 3), step=14)
         counter = 0
         for i in range(patches.shape[0]):
             for j in range(patches.shape[1]):
@@ -109,7 +103,7 @@ def makeDatasetIntoPatchDatasetx3(datasetPath, newPatchesPath, lowResPath, highR
 
                 h, w, _ = patch.shape
                 low_res_img = cv2.resize(
-                    patch, (int(w*1/3), int(h*1/3)), interpolation=cv2.INTER_CUBIC)
+                    patch, (int(w*1/scale), int(h*1/scale)), interpolation=cv2.INTER_CUBIC)
 
                 high_res_upscale = cv2.resize(low_res_img, (w, h),
                                               interpolation=cv2.INTER_CUBIC)
@@ -123,48 +117,25 @@ def makeDatasetIntoPatchDatasetx3(datasetPath, newPatchesPath, lowResPath, highR
                     "./Datasets/" + highResPath + "/" + name + "_upscaled_" + str(counter) + ".png")
 
 
-def makeDatasetIntoPatchDatasetx2(datasetPath, newPatchesPath, lowResPath, highResPath):
-    images = []
-    # Get names of all image files in dataset and save the images as np arrays
-    for f in sorted(glob.iglob("./Datasets/" + datasetPath + "/*")):
-        # remove path before file name and file extension
-        name = (f.split("\\")[1]).split(".")[0]
-        images.append((name, np.array(Image.open(f))))
 
-    for image in images:
-        (name, img) = image
-        patches = patchify(img, (32, 32, 3), step=14)
-        counter = 0
-        for i in range(patches.shape[0]):
-            for j in range(patches.shape[1]):
-                counter += 1
-                patch = patches[i, j, 0]
-                patch_img = Image.fromarray(patch)
-                patch_img.save("./Datasets/" + newPatchesPath +
-                               "/" + name + "_" + str(counter) + ".png")
+def nearestRound(n, scale): 
+    return n - n % scale
 
-                h, w, _ = patch.shape
-                low_res_img = cv2.resize(
-                    patch, (int(w*1/2), int(h*1/2)), interpolation=cv2.INTER_CUBIC)
 
-                high_res_upscale = cv2.resize(low_res_img, (w, h),
-                                              interpolation=cv2.INTER_CUBIC)
 
-                low_res_img_PIL = Image.fromarray(low_res_img)
-                high_res_upscale_PIL = Image.fromarray(high_res_upscale)
-
-                low_res_img_PIL.save(
-                    "./Datasets/" + lowResPath + "/" + name + "_lowRes_" + str(counter) + ".png")
-                high_res_upscale_PIL.save(
-                    "./Datasets/" + highResPath + "/" + name + "_upscaled_" + str(counter) + ".png")
+def crop_center(img,cropx,cropy):
+    y,x,c = img.shape
+    startx = x//2 - cropx//2
+    starty = y//2 - cropy//2    
+    return img[starty:starty+cropy, startx:startx+cropx, :]
 
 
 # ----------- code ------------
 #makeDatasetIntoPatches("T91/T91_Original", "T91/T91_HR_Patches")
 #makeLowAndHighResPatches("T91/T91_HR_Patches", "T91/T91_LR_Patches", "T91/T91_Upscaled_Patches")
 #makeDatasetIntoPatchDataset("T91/T91_Original", "T91/T91_HR_Patches", "T91/T91_LR_Patches", "T91/T91_Upscaled_Patches")
-# makeBlurredImages("Set19/Original", "Set19/LR")
-makeBlurredImagesx2("Set19/Original", "Set19/LR_x2")
+makeBlurredImages("Set19/Original", "Set19/LRCropx3")
+#makeBlurredImagesx2("Set19/Original", "Set19/LR_x2")
 
 #makeDatasetIntoPatchDatasetx2("T91/T91_Original", "T91/T91_HR_Patches_x2", "T91/T91_LR_Patches_x2", "T91/T91_Upscaled_Patches_x2")
 
