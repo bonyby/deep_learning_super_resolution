@@ -394,10 +394,10 @@ class ModularFSRCNN(nn.Module):
         self.relum3 = nn.PReLU()
         self.convm4 = nn.Conv2d(s, s, (3, 3), padding=1)
         self.relum4 = nn.PReLU()
-        self.convm5 = nn.Conv2d(s, s, (3, 3), padding=1)
-        self.relum5 = nn.PReLU()
-        self.convm6 = nn.Conv2d(s, s, (3, 3), padding=1)
-        self.relum6 = nn.PReLU()
+        # self.convm5 = nn.Conv2d(s, s, (3, 3), padding=1)
+        # self.relum5 = nn.PReLU()
+        # self.convm6 = nn.Conv2d(s, s, (3, 3), padding=1)
+        # self.relum6 = nn.PReLU()
 
 
         # Expansion
@@ -412,8 +412,9 @@ class ModularFSRCNN(nn.Module):
         #If we add padding=3 it means we treat a 3x3 border around the result as not part of the result. It makes sense since 3 results on either side will not be an overlay of three inputs with the filter.  
         self.deconv = nn.ConvTranspose2d(d, 3, (9, 9), padding=scale, stride=scale)
 
+
         self.params = nn.ModuleDict({
-           'convs': nn.ModuleList([self.conv1, self.conv2, self.convm1, self.convm2, self.convm3, self.convm4, self.convm5, self.convm6, self.conv3]),
+           'convs': nn.ModuleList([self.conv1, self.conv2, self.convm1, self.convm2, self.convm3, self.convm4, self.conv3]),
            'deconvs': nn.ModuleList([self.deconv])})
         # self.params = nn.ModuleDict({
         #    'convs': nn.ModuleList([]),
@@ -438,10 +439,10 @@ class ModularFSRCNN(nn.Module):
         x = self.relum3(x)
         x = self.convm4(x)
         x = self.relum4(x)
-        x = self.convm5(x)
-        x = self.relum5(x)
-        x = self.convm6(x)
-        x = self.relum6(x)
+        # x = self.convm5(x)
+        # x = self.relum5(x)
+        # x = self.convm6(x)
+        # x = self.relum6(x)
 
         # Expansion
         x = self.conv3(x)
@@ -645,8 +646,7 @@ def get_tensor_images_high_low(path_low, path_high, n=-1):
     return ImageDataset(images_low, images_high)
 
 
-def get_random_images_for_prediction(n=1, scale=3):
-    # path = "./Datasets/T91/T91_Original/*"
+def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
     path = "./Datasets/Set19/OriginalCropx3/*"
     files = [f for f in glob.iglob(path)]
     random.shuffle(files)
@@ -654,15 +654,23 @@ def get_random_images_for_prediction(n=1, scale=3):
     upscaled_imgs = []
     original_imgs = []
     low_res_imgs = []
-
+    picture_names = []
     tensor_transform = transforms.ToTensor()
 
     counter = 0
-
     for f in files:
-
-        if counter >= n:
-            break
+        if len(listOfImages) ==  0:
+            if counter >= n:
+                break
+        else:
+            name = (f.split("\\")[1]).split(".")[0]
+            if name not in listOfImages:
+                #print("This is not in the list...")
+                continue
+            print("Whew, ", str(name), "is in the list", str(listOfImages)) 
+            
+            
+        picture_names.append(name)
         pic = Image.open(f)
         img = np.array(pic)
 
@@ -684,7 +692,7 @@ def get_random_images_for_prediction(n=1, scale=3):
     upscaled_img_ds = ImageDataset(upscaled_imgs, original_imgs)
     lr_dataloader = DataLoader(lr_img_ds, batch_size=1, shuffle=False)
     upscaled_dataloader = DataLoader(upscaled_img_ds, batch_size=1, shuffle=False)
-    return lr_dataloader, upscaled_dataloader
+    return lr_dataloader, upscaled_dataloader, picture_names
 
 # ------------------- CODE -------------------
 
@@ -693,34 +701,39 @@ def main():
     bs = 128
     epochs = 200
 
-    train_dl, test_dl = loadFSRCNNdata(bs=bs)
-    model, loss_func, optim, load_path = setupFSRCNN(load_model=False, lr=0.001, load_path="DeeperFSRCNN")
+    #train_dl, test_dl = loadFSRCNNdata(bs=bs)
+    model, loss_func, optim, load_path = setupFSRCNN(load_model=True, lr=0.001, load_path="FSRCNN")
     #summary(model, input_size=(3,11,11))
     
     #model = BicubicBaseline().cuda()
-    fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path)
+    #fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path)
     
     #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs)
 
 
-    lr_dl, upscaled_dl = get_random_images_for_prediction(scale=3)
+    lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["baboon", "monarch", "comic"])
 
     model.eval()
+    counter1 = 0
     for xb, yb in lr_dl:
         input = xb.cuda()[None, 0]
         result = model(input)
         clampedResult = result.clamp(0, 1)
-        #print("result size: " + str(result.size()))
-        #print("original size: " + str(yb[0].size()))
-        #print("Result values: " + str(result))
-        show_tensor_as_image(clampedResult, "result")
-        show_tensor_as_image(yb[0], "original")
-        show_tensor_as_image(input, "input")
+
+        print(str(picture_numbers[counter1]) + " upscaled PSNR: " + str(PSNRaccuracy(result, yb[0].cuda())))
+
+        #show_tensor_as_image(clampedResult, "result")
+        #show_tensor_as_image(yb[0], "original")
+        #show_tensor_as_image(input, "input")
+        counter1 += 1
         
+
+    counter2 = 0
     for xb, yb in upscaled_dl:
         blurred = xb.cuda()[None, 0]
-
-        show_tensor_as_image(blurred, "blurred")
+        print(str(picture_numbers[counter2]) + " bicubic upscale reference PSNR:" + str(PSNRaccuracy(blurred, yb[0].cuda())))
+        #show_tensor_as_image(blurred, "blurred")
+        counter2 += 1
 
 if __name__ == "__main__":
     main()
