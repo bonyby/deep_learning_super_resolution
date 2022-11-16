@@ -694,6 +694,33 @@ def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
     upscaled_dataloader = DataLoader(upscaled_img_ds, batch_size=1, shuffle=False)
     return lr_dataloader, upscaled_dataloader, picture_names
 
+
+
+def evaluateModel(model, lr_dl, upscaled_dl, picture_numbers, show_images=True):
+    model.eval()
+    counter1 = 0
+    for xb, yb in lr_dl:
+        input = xb.cuda()[None, 0]
+        result = model(input)
+        clampedResult = result.clamp(0, 1)
+
+        print(str(picture_numbers[counter1]) + " upscaled PSNR: " + str(PSNRaccuracy(result, yb[0].cuda())))
+        if show_images:
+            show_tensor_as_image(clampedResult, "result")
+            show_tensor_as_image(yb[0], "original")
+            show_tensor_as_image(input, "input")
+        counter1 += 1
+        
+
+    counter2 = 0
+    for xb, yb in upscaled_dl:
+        blurred = xb.cuda()[None, 0]
+        print(str(picture_numbers[counter2]) + " bicubic upscale reference PSNR:" + str(PSNRaccuracy(blurred, yb[0].cuda())))
+        if show_images:
+            show_tensor_as_image(blurred, "blurred")
+        counter2 += 1
+
+
 # ------------------- CODE -------------------
 
 
@@ -713,27 +740,7 @@ def main():
 
     lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["baboon", "monarch", "comic"])
 
-    model.eval()
-    counter1 = 0
-    for xb, yb in lr_dl:
-        input = xb.cuda()[None, 0]
-        result = model(input)
-        clampedResult = result.clamp(0, 1)
-
-        print(str(picture_numbers[counter1]) + " upscaled PSNR: " + str(PSNRaccuracy(result, yb[0].cuda())))
-
-        #show_tensor_as_image(clampedResult, "result")
-        #show_tensor_as_image(yb[0], "original")
-        #show_tensor_as_image(input, "input")
-        counter1 += 1
-        
-
-    counter2 = 0
-    for xb, yb in upscaled_dl:
-        blurred = xb.cuda()[None, 0]
-        print(str(picture_numbers[counter2]) + " bicubic upscale reference PSNR:" + str(PSNRaccuracy(blurred, yb[0].cuda())))
-        #show_tensor_as_image(blurred, "blurred")
-        counter2 += 1
+    evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
 
 if __name__ == "__main__":
     main()
