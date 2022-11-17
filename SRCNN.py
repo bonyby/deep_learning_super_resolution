@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import math
 import random
 import cv2
+import PIL
 
 from torchsummary import summary
 from torchvision import datasets
@@ -17,6 +18,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data import TensorDataset
 from torch.utils.data import Dataset
 from PIL import Image
+
 
 
 # https://github.com/yjn870/SRCNN-pytorch/blob/master/train.py
@@ -128,7 +130,7 @@ def PSNRaccuracy(scores, yb, max_val=1):
 
     diff = scores - yb_cropped
     diff_flat = torch.flatten(diff, start_dim=1)
-
+    #print("Max value: ", str(yb.max()))
     rmse = torch.sqrt(torch.mean(torch.square(diff_flat)))
     # 10 * log_10(MAX_I^2/MSE)
     # divres = 1/mse
@@ -655,7 +657,7 @@ def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
     original_imgs = []
     low_res_imgs = []
     picture_names = []
-    tensor_transform = transforms.ToTensor()
+    tensor_transform = transforms.ToTensor() #Converts from 0,255 to 0,1
 
     counter = 0
     for f in files:
@@ -675,11 +677,14 @@ def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
         img = np.array(pic)
 
         h, w, _ = img.shape
-        low_res_img = cv2.resize(
-            img, (int(w*1/scale), int(h*1/scale)), interpolation=cv2.INTER_CUBIC)
+        # low_res_img = cv2.resize(img, (w//scale, h//scale), interpolation=cv2.INTER_CUBIC)
+        # print("Low_res_img max: ", low_res_img.max())
+        # high_res_upscale = cv2.resize(low_res_img, (w, h), interpolation=cv2.INTER_CUBIC)
         
-        high_res_upscale = cv2.resize(low_res_img, (w, h),
-                                        interpolation=cv2.INTER_CUBIC)
+        low_res = pic.resize(size=(w//scale,h//scale), resample=Image.BICUBIC)
+        upscaled = low_res.resize(size=(w,h), resample=Image.BICUBIC)
+        low_res_img = np.array(low_res)
+        high_res_upscale = np.array(upscaled)
 
         low_res_imgs.append(tensor_transform(low_res_img))
         upscaled_imgs.append(tensor_transform(high_res_upscale))
@@ -738,9 +743,9 @@ def main():
     #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs)
 
 
-    lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["baboon", "monarch", "comic"])
+    lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["baboon"])
 
-    evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
+    evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=False)
 
 if __name__ == "__main__":
     main()
