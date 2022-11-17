@@ -42,6 +42,8 @@ class ImageDataset(Dataset):
 
 
 def loss_batch(model, loss_func, xb, yb, opt=None):
+    #xbTransformed, ybTransformed = apply_image_transformations(xb, yb)
+
     predictions_unclamped = model(xb.cuda())
     loss = loss_func(predictions_unclamped, yb.cuda())
     psnr = PSNRaccuracy(predictions_unclamped.clamp(0, 1), yb.cuda())
@@ -61,7 +63,8 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN"):
 
     print('Epochs:', epochs, 'Total number of batches', num_batches, 'Total number of elements', num_elements)
 
-    psnr_history = []
+    val_psnr_history = []
+    training_psnr_history = []
     t_counter = 0
     t = []
 
@@ -86,7 +89,8 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN"):
         val_loss = np.sum(np.multiply(losses, nums)) / np.sum(nums)
         val_psnr = np.sum(val_psnrs) / len(val_psnrs)  # average PSNR per batch
 
-        psnr_history.append(val_psnr)
+        training_psnr_history.append(train_psnr)
+        val_psnr_history.append(val_psnr)
         t_counter += 1
         t.append(t_counter)
 
@@ -109,9 +113,12 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN"):
     # l, = plt.plot(plot_time_valid,valid_loss_history)
     # lines.append(l)
     # labels.append('Validation')
-    l, = plt.plot(t, psnr_history)
+    l, = plt.plot(t, val_psnr_history)
     lines.append(l)
-    labels.append("PSNR")
+    labels.append("Validation PSNR")
+    l, = plt.plot(t, training_psnr_history)
+    lines.append(l)
+    labels.append("Training PSNR")
     plt.title('PSNR')
     plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
     plt.show()
@@ -124,11 +131,11 @@ def base_lr_scheduler(t, T, lr):
 
 
 def PSNRaccuracy(scores, yb, max_val=1):
-    crop_transform = transforms.CenterCrop(
-        size=(scores.size(dim=2), scores.size(dim=3)))
-    yb_cropped = crop_transform(yb)
+    # crop_transform = transforms.CenterCrop(
+    #     size=(scores.size(dim=2), scores.size(dim=3)))
+    # yb_cropped = crop_transform(yb)
 
-    diff = scores - yb_cropped
+    diff = scores - yb
     diff_flat = torch.flatten(diff, start_dim=1)
     #print("Max value: ", str(yb.max()))
     rmse = torch.sqrt(torch.mean(torch.square(diff_flat)))
@@ -396,10 +403,6 @@ class ModularFSRCNN(nn.Module):
         self.relum3 = nn.PReLU()
         self.convm4 = nn.Conv2d(s, s, (3, 3), padding=1)
         self.relum4 = nn.PReLU()
-        # self.convm5 = nn.Conv2d(s, s, (3, 3), padding=1)
-        # self.relum5 = nn.PReLU()
-        # self.convm6 = nn.Conv2d(s, s, (3, 3), padding=1)
-        # self.relum6 = nn.PReLU()
 
 
         # Expansion
@@ -416,7 +419,9 @@ class ModularFSRCNN(nn.Module):
 
 
         self.params = nn.ModuleDict({
-           'convs': nn.ModuleList([self.conv1, self.conv2, self.convm1, self.convm2, self.convm3, self.convm4, self.conv3]),
+           'convs': nn.ModuleList([self.conv1, self.conv2, self.convm1, self.convm2, self.convm3, self.convm4, self.conv3
+           , self.relum1, self.relum2, self.relum3, self.relum4, self.relu1, self.relu2, self.relu3
+           ]),
            'deconvs': nn.ModuleList([self.deconv])})
         # self.params = nn.ModuleDict({
         #    'convs': nn.ModuleList([]),
@@ -441,10 +446,6 @@ class ModularFSRCNN(nn.Module):
         x = self.relum3(x)
         x = self.convm4(x)
         x = self.relum4(x)
-        # x = self.convm5(x)
-        # x = self.relum5(x)
-        # x = self.convm6(x)
-        # x = self.relum6(x)
 
         # Expansion
         x = self.conv3(x)
@@ -455,6 +456,137 @@ class ModularFSRCNN(nn.Module):
         #print("x after deconv size: " + str(x.size()))
 
         return x
+
+class BRFSRCNN(nn.Module):
+    def __init__(self):
+        d = 64
+        intermediate = 32
+        s1 = 16
+        m = 4
+        scale = 3
+
+        super(BRFSRCNN, self).__init__()
+        #nn.Conv2d(input_channels, output_channels, kernel_size)
+        self.relu = nn.ReLU()
+        self.prelu1 = nn.PReLU()
+        self.prelu2 = nn.PReLU()
+        self.prelu3 = nn.PReLU()
+        self.prelu4 = nn.PReLU()
+
+
+        # Feature extraction
+        self.conv1 = nn.Conv2d(3, 64, (5, 5), padding=2)
+        self.conv2 = nn.Conv2d(64, 64, (5, 5), padding=2)
+        self.conv3 = nn.Conv2d(64, 64, (5, 5), padding=2)
+        self.bnorm1 = nn.BatchNorm2d(num_features=64)
+
+        # Shrinking
+        self.conv4 = nn.Conv2d(64, 32, (1, 1))
+        self.conv5 = nn.Conv2d(32, 16, (1, 1))
+
+        # Mapping
+        self.convm1 = nn.Conv2d(16, 16, (3, 3), padding=1)
+        self.bnorm2  = nn.BatchNorm2d(16)
+        self.convm2 = nn.Conv2d(16, 16, (3, 3), padding=1)
+        self.bnorm3  = nn.BatchNorm2d(16)
+        
+        self.convm3 = nn.Conv2d(16, 16, (3, 3), padding=1)
+        self.bnorm4  = nn.BatchNorm2d(16)
+        self.convm4 = nn.Conv2d(16, 16, (3, 3), padding=1)
+        self.bnorm5  = nn.BatchNorm2d(16)
+        
+        self.convm5 = nn.Conv2d(16, 16, (3, 3), padding=1)
+        self.bnorm6  = nn.BatchNorm2d(16)
+        self.convm6 = nn.Conv2d(16, 16, (3, 3), padding=1)
+        self.bnorm7  = nn.BatchNorm2d(16)
+        
+        self.convm7 = nn.Conv2d(16, 16, (3, 3), padding=1)
+        self.bnorm8  = nn.BatchNorm2d(16)
+        self.convm8 = nn.Conv2d(16, 16, (3, 3), padding=1)
+        self.bnorm9  = nn.BatchNorm2d(16)
+
+        # Expansion
+        self.conv6 = nn.Conv2d(s1, intermediate, (1, 1))
+        self.conv7 = nn.Conv2d(intermediate, d, (1, 1))
+
+        # Deconvolution
+        #ConvTranspose2d(in_channels, out_channels, kernel_size, padding, stride)
+        #Takes input of size nxn. From this, it takes the (k x k) kernel and uses it for each value in the nxn input
+        #If stride is 3, with kernel size (9,9), it means that we make a new matrix where we start in the top corner
+        #making a 9x9 matrix. Then we slide by 3 to the right, and we now have a 12x9 matrix. This means we get 9+(n-1)x3 size in total (we don't slide for the first of the n values)
+        #If we add padding=3 it means we treat a 3x3 border around the result as not part of the result. It makes sense since 3 results on either side will not be an overlay of three inputs with the filter.  
+        self.deconv = nn.ConvTranspose2d(d, 3, (9, 9), padding=scale, stride=scale)
+
+        self.params = nn.ModuleDict({
+            'convs': nn.ModuleList([self.conv1, self.conv2, self.conv3, self.bnorm1, self.conv4, self.conv5, self.convm1, self.bnorm2, self.convm2, self.bnorm3, self.convm3, self.bnorm4, self.convm4, self.bnorm5, self.convm5, self.bnorm6, self.convm6, self.bnorm7, self.convm7, self.bnorm8, self.convm8, self.bnorm9, self.conv6, self.conv7]),
+           'deconvs': nn.ModuleList([self.deconv])})
+        # self.params = nn.ModuleDict({
+        #    'convs': nn.ModuleList([]),
+        #    'deconvs': nn.ModuleList([])})
+
+    def forward(self, x):
+        #print("x init size: " + str(x.size()))
+        # Feature extraction
+        x = self.conv1(x)
+        x = self.relu(x)
+        x = self.conv2(x)
+        x = self.relu(x)
+        x = self.conv3(x)
+        x = self.bnorm1(x)
+        x = self.relu(x)
+
+        # Shrinking
+        x = self.conv4(x)
+        x = self.relu(x)
+        x = self.conv5(x)
+        x = self.relu(x)
+
+        # Mapping
+        identity = x
+        x = self.convm1(x)
+        x = self.bnorm2(x)
+        x = self.relu(x)
+        x = self.convm2(x)
+        x = self.bnorm3(x)
+        x = torch.add(x, identity)
+
+        identity = x
+        x = self.convm3(x)
+        x = self.bnorm4(x)
+        x = self.relu(x)
+        x = self.convm4(x)
+        x = self.bnorm5(x)
+        x = torch.add(x, identity)
+
+        identity = x
+        x = self.convm5(x)
+        x = self.bnorm6(x)
+        x = self.relu(x)
+        x = self.convm6(x)
+        x = self.bnorm7(x)
+        x = torch.add(x, identity)
+
+        identity = x
+        x = self.convm7(x)
+        x = self.bnorm8(x)
+        x = self.relu(x)
+        x = self.convm8(x)
+        x = self.bnorm9(x)
+        x = torch.add(x, identity)
+
+        # Expansion
+        x = self.conv6(x)
+        x = self.relu(x)
+        x = self.conv7(x)
+        x = self.relu(x)
+
+        # Deconvolution
+        x = self.deconv(x)
+        #print("x after deconv size: " + str(x.size()))
+
+        return x
+
+
 
 
 def setupSRCNN(load_model=False, load_path="SRCNN", lr=0.001):
@@ -474,9 +606,9 @@ def setupSRCNN(load_model=False, load_path="SRCNN", lr=0.001):
 def loadSRCNNdata(bs=128, n=-1, scale=3):
     if(scale == 3):
         train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_Upscaled_Patches", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
+            "./Datasets/T91/T91_Upscaled_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
         test_dl = get_preprocessed_dataloader(
-            "./Datasets/Set19/BlurredCropx3", "./Datasets/Set19/Original", bs=1)
+            "./Datasets/Set19/Upscaled_x3gaussPIL", "./Datasets/Set19/OriginalCropx3", bs=1)
     elif(scale == 2):
         train_dl = get_preprocessed_dataloader(
             "./Datasets/T91/T91_Upscaled_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs)
@@ -498,13 +630,26 @@ def setupFSRCNN(load_model=False, load_path="FSRCNN", lr=0.001):
 
     return model, loss_func, optim, load_path
 
+def setupBRFSRCNN(load_model= False, load_path="BRFSRCNN", lr=0.001):
+    model = BRFSRCNN().cuda()
+
+    if load_model:
+        model.load_state_dict(torch.load("./Models/"+ load_path + ".pth" ))
+    else:
+        reset_parameters(model)
+
+    loss_func = MSE
+    optim = adam_SGD_DeepNet(model, lr=lr)
+
+    return model, loss_func, optim, load_path
+
 
 def loadFSRCNNdata(bs=128, n=-1, scale=3):
     if(scale == 3):
         train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_LR_Patches", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
+            "./Datasets/T91/T91_LR_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
         test_dl = get_preprocessed_dataloader(
-            "./Datasets/Set19/LRCropx3", "./Datasets/Set19/OriginalCropx3", bs=1, shuffle=False)
+            "./Datasets/Set19/LR_x3gaussPIL", "./Datasets/Set19/OriginalCropx3", bs=1, shuffle=False)
     elif(scale == 2):
         train_dl = get_preprocessed_dataloader(
             "./Datasets/T91/T91_LR_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs)
@@ -544,6 +689,11 @@ def adam_SGD_faster(model, lr=0.001):
         {'params': model.params.deconvs.parameters(), 'lr': lr*0.1}
     ], lr=lr)
 
+def adam_SGD_DeepNet(model, lr=0.001):
+    return optim.Adam([
+        {'params': model.params.convs.parameters()},
+        {'params': model.params.deconvs.parameters(), 'lr': lr*0.1}
+    ], lr=lr)
 
 def reset_parameters(net):
     '''Init layer parameters.'''
@@ -557,13 +707,13 @@ def reset_parameters(net):
         if isinstance(m, nn.ConvTranspose2d):
             print("conv2d transpose parameter reset")
             nn.init.normal_(m.weight, mean=0, std=0.001)
-        '''elif isinstance(m, nn.BatchNorm2d):
+        elif isinstance(m, nn.BatchNorm2d):
             torch.nn.init.constant_(m.weight, 1) # Why 1?
             torch.nn.init.constant_(m.bias, 0) # Why 0?
         elif isinstance(m, nn.Linear):
             torch.nn.init.kaiming_normal_(m.weight)
             if m.bias is not None:
-                torch.nn.init.constant_(m.bias, 0)'''
+                torch.nn.init.constant_(m.bias, 0)
 
 
 def get_preprocessed_dataloaders(lowPath, highPath, n=-1, bs=8):
@@ -658,6 +808,7 @@ def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
     low_res_imgs = []
     picture_names = []
     tensor_transform = transforms.ToTensor() #Converts from 0,255 to 0,1
+    gaussian_kernel = transforms.GaussianBlur(kernel_size=(3,3), sigma=0.7)
 
     counter = 0
     for f in files:
@@ -669,19 +820,20 @@ def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
             if name not in listOfImages:
                 #print("This is not in the list...")
                 continue
-            print("Whew, ", str(name), "is in the list", str(listOfImages)) 
+            #print("Whew, ", str(name), "is in the list", str(listOfImages)) 
             
             
         picture_names.append(name)
         pic = Image.open(f)
         img = np.array(pic)
-
+    
         h, w, _ = img.shape
         # low_res_img = cv2.resize(img, (w//scale, h//scale), interpolation=cv2.INTER_CUBIC)
         # print("Low_res_img max: ", low_res_img.max())
         # high_res_upscale = cv2.resize(low_res_img, (w, h), interpolation=cv2.INTER_CUBIC)
         
-        low_res = pic.resize(size=(w//scale,h//scale), resample=Image.BICUBIC)
+        gaus_pic = gaussian_kernel(pic)
+        low_res = gaus_pic.resize(size=(w//scale,h//scale), resample=Image.BICUBIC)
         upscaled = low_res.resize(size=(w,h), resample=Image.BICUBIC)
         low_res_img = np.array(low_res)
         high_res_upscale = np.array(upscaled)
@@ -699,10 +851,32 @@ def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
     upscaled_dataloader = DataLoader(upscaled_img_ds, batch_size=1, shuffle=False)
     return lr_dataloader, upscaled_dataloader, picture_names
 
+def apply_image_transformations(input, target):
+    seed = random.randrange(0, 100000)
+    jitter = transforms.ColorJitter(brightness=0.5, contrast=0.7, saturation=0.7, hue=0.5)
+    verticalFlip = transforms.RandomVerticalFlip(p=0.2)
+    horizontalFlip = transforms.RandomHorizontalFlip(p=0.2)
+    greyscale = transforms.RandomGrayscale(p=0.1)
+    randjitter = transforms.RandomApply(nn.ModuleList([jitter]), p=0.2)
+    
+    #TODO: Rotations
+
+    torch.random.manual_seed(seed)
+    random.seed(seed)
+    # transformedInput = greyscale(horizontalFlip(verticalFlip(randjitter(input))))
+    transformedInput = transforms.Lambda(lambda x: torch.stack([greyscale(horizontalFlip(verticalFlip(randjitter(x_)))) for x_ in x]))(input)
+    torch.random.manual_seed(seed)
+    random.seed(seed)
+    # transformedTarget = greyscale(horizontalFlip(verticalFlip(randjitter(target))))
+    transformedTarget = transforms.Lambda(lambda x: torch.stack([greyscale(horizontalFlip(verticalFlip(randjitter(x_)))) for x_ in x]))(target)
+
+
+    return transformedInput, transformedTarget
 
 
 def evaluateModel(model, lr_dl, upscaled_dl, picture_numbers, show_images=True):
     model.eval()
+
     counter1 = 0
     for xb, yb in lr_dl:
         input = xb.cuda()[None, 0]
@@ -731,21 +905,21 @@ def evaluateModel(model, lr_dl, upscaled_dl, picture_numbers, show_images=True):
 
 def main():
     bs = 128
-    epochs = 200
+    epochs = 300
 
-    #train_dl, test_dl = loadFSRCNNdata(bs=bs)
-    model, loss_func, optim, load_path = setupFSRCNN(load_model=True, lr=0.001, load_path="FSRCNN")
-    #summary(model, input_size=(3,11,11))
+    train_dl, test_dl = loadFSRCNNdata(bs=bs)
+    model, loss_func, optim, load_path = setupFSRCNN(load_model=False, lr=0.001, load_path="FSRCNNDataAug")
+    # summary(model, input_size=(3,11,11))
     
     #model = BicubicBaseline().cuda()
-    #fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path)
+    fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path)
     
     #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs)
 
 
-    lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["baboon"])
+    lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["ppt3", "monarch", "comic"])
 
-    evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=False)
+    evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
 
 if __name__ == "__main__":
     main()

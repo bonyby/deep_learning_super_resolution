@@ -12,6 +12,16 @@
 4. TBD
 
 
+Data augmentation:
+1. Colorjitter
+2. RandomInvert
+3. Horizontal/Verical Flips
+4. Rotation
+5. Grayscale
+(RandomApply)
+
+
+
 
 
 Spørgsmål:
