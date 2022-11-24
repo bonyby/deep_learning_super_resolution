@@ -17,27 +17,10 @@ from torchvision import transforms
 #         patch.save("./Datasets/T91/T91_HR_Patches/t1_" + str(counter) + ".png")
 
 
-def makeDatasetIntoPatches(datasetPath, newPatchesPath):
-    images = []
-    # Get names of all image files in dataset and save the images as np arrays
-    for f in glob.iglob("./Datasets/" + datasetPath + "/*"):
-        # remove path before file name and file extension
-        name = (f.split("\\")[1]).split(".")[0]
-        images.append((name, np.array(Image.open(f))))
-
-    for image in images:
-        (name, img) = image
-        patches = patchify(img, (33, 33, 3), step=14)
-        counter = 0
-        for i in range(patches.shape[0]):
-            for j in range(patches.shape[1]):
-                counter += 1
-                patch = Image.fromarray(patches[i, j, 0])
-                patch.save("./Datasets/" + newPatchesPath + "/" +
-                           name + "_" + str(counter) + ".png")
-
-
-# Takes scale as input
+#This method is for the Set19 Validation/Test images
+#Takes the original images as input and does the following:
+# 1. Crops them  minimally such that we can divide by scale and get a whole number
+# 2. 
 def makeBlurredImages(imagesPath, croppedPath, downscaledPath, blurredPath, scale):
     images = []
     gaussian_kernel = transforms.GaussianBlur(kernel_size=(3,3), sigma=0.7)

@@ -7,6 +7,8 @@ import math
 import random
 import cv2
 import PIL
+import time
+
 
 from torchsummary import summary
 from torchvision import datasets
@@ -18,6 +20,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data import TensorDataset
 from torch.utils.data import Dataset
 from PIL import Image
+from BigNet import BigNet
 
 
 
@@ -99,7 +102,7 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN"):
         print("Epoch: " + str(epoch) + " Train loss: " + str(train_loss) + " Train PSNR: " +
               str(train_psnr) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
 
-        if (epoch + 1) % 100 == 0:
+        if (epoch + 1) % 25 == 0:
             # Save the model
             print("Saving model weights...")
             torch.save(model.state_dict(), "./Models/" + save_path + ".pth")
@@ -166,6 +169,8 @@ def fit2(model,
          show_summary=True):
 
     bs = trainset.batch_size
+    num_batches = len(train_dl)
+
 
     # Set up data loaders
     if batches_per_epoch == None:
@@ -250,7 +255,7 @@ def fit2(model,
                 model.train()  # Back to train mode
 
                 # At the end of an epoch:
-            if t % bs-1 == 0:  # -1 or not?
+            if t % num_batches == 0:
                 model.eval()  # Test mode
                 with torch.no_grad():
                     valid_acc = sum(accuracy(model(xb.cuda()), yb.cuda())
@@ -288,23 +293,14 @@ def MSE(input, target):
         size=(input.size(dim=2), input.size(dim=3)))
     tgt = crop_transform(target)
 
-    #print("Left top corner of target:" + str(target[0,1,6,6]))
-    #print("Right bottom corner of target:" + str(target[0,1,26,26]))
-
-    #print("Left top corner of tgt:" + str(tgt[0,1,0,0]))
-    #print("Right bottom corner of tgt:" + str(tgt[0,1,20,20]))
-    # show_tensor_as_image(input[None,0])
-    #show_tensor_as_image(tgt[None, 0])
-    # loss = 0
-    # bs = input.size(dim = 0)
-    # for i in range(bs):
-    #     loss += MSE_Single(input[i], tgt[i])
-
-    # return loss / bs
-
     mse = F.mse_loss
     return mse(input, tgt)
 
+
+#Computes the absolute difference between the pixel values (instead of the squared difference)
+def MAE(input, target):
+    mae = F.l1_loss
+    return mae(input, target)
 
 def MSE_Single(input, target):
     # Calculate MSE
@@ -603,15 +599,15 @@ def setupSRCNN(load_model=False, load_path="SRCNN", lr=0.001):
     return model, loss_func, optim, load_path
 
 
-def loadSRCNNdata(bs=128, n=-1, scale=3):
+def loadSRCNNdata(bs=128, n=-1, scale=3, augment=False, num_augmentations=3):
     if(scale == 3):
         train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_Upscaled_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
+            "./Datasets/T91/T91_Upscaled_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs, augment=augment, num_augmentations=num_augmentations)
         test_dl = get_preprocessed_dataloader(
             "./Datasets/Set19/Upscaled_x3gaussPIL", "./Datasets/Set19/OriginalCropx3", bs=1)
     elif(scale == 2):
         train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_Upscaled_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs)
+            "./Datasets/T91/T91_Upscaled_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs, augment=augment, num_augmentations=num_augmentations)
         test_dl = get_preprocessed_dataloader(
             "./Datasets/Set19/Blurred_x2", "./Datasets/Set19/Original", bs=1)
     return train_dl, test_dl
@@ -643,16 +639,28 @@ def setupBRFSRCNN(load_model= False, load_path="BRFSRCNN", lr=0.001):
 
     return model, loss_func, optim, load_path
 
+def setupBigNet(load_model=False, load_path="BigNet", lr=0.0001):
+    model = BigNet().cuda()
 
-def loadFSRCNNdata(bs=128, n=-1, scale=3):
+    if load_model:
+        model.load_state_dict(torch.load("./Models/" + load_path + ".pth"))
+    else:
+        reset_parameters(model)
+
+    loss_func = MAE
+    optim = adam_SGD_BigNet(model, lr=lr)
+
+    return model, loss_func, optim, load_path
+
+def loadFSRCNNdata(bs=128, n=-1, scale=3, augment=False, num_augmentations=3):
     if(scale == 3):
         train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_LR_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
+            "./Datasets/T91/T91_LR_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs, augment=augment, num_augmentations=num_augmentations)
         test_dl = get_preprocessed_dataloader(
             "./Datasets/Set19/LR_x3gaussPIL", "./Datasets/Set19/OriginalCropx3", bs=1, shuffle=False)
     elif(scale == 2):
         train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_LR_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs)
+            "./Datasets/T91/T91_LR_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs, augment=augment, num_augmentations=num_augmentations)
         test_dl = get_preprocessed_dataloader(
             "./Datasets/Set19/LR_x2", "./Datasets/Set19/Original", bs=1, shuffle=False)
     return train_dl, test_dl
@@ -695,17 +703,20 @@ def adam_SGD_DeepNet(model, lr=0.001):
         {'params': model.params.deconvs.parameters(), 'lr': lr*0.1}
     ], lr=lr)
 
+
+def adam_SGD_BigNet(model, lr=0.001):
+    return optim.Adam(model.parameters(), )
+
 def reset_parameters(net):
     '''Init layer parameters.'''
+    counter = 0
     for m in net.modules():
         if isinstance(m, nn.Conv2d):
-            print("init'ing conv2d layer...")
             #torch.nn.init.normal_(m.weight, mean=0, std=0.001)
             torch.nn.init.kaiming_normal_(m.weight)
             if m.bias is not None:
-                torch.nn.init.constant_(m.bias, 0)
+                torch.nn.init.constant_(m.bias, 0)            
         if isinstance(m, nn.ConvTranspose2d):
-            print("conv2d transpose parameter reset")
             nn.init.normal_(m.weight, mean=0, std=0.001)
         elif isinstance(m, nn.BatchNorm2d):
             torch.nn.init.constant_(m.weight, 1) # Why 1?
@@ -714,7 +725,9 @@ def reset_parameters(net):
             torch.nn.init.kaiming_normal_(m.weight)
             if m.bias is not None:
                 torch.nn.init.constant_(m.bias, 0)
-
+        print("Reseting layer: " + str(counter))
+        counter += 1
+    
 
 def get_preprocessed_dataloaders(lowPath, highPath, n=-1, bs=8):
     train_dataset, test_dataset, val_dataset = get_preprocessed_image_sets(
@@ -749,18 +762,19 @@ def get_preprocessed_image_sets(path_low, path_high, n=-1):
     return train_dataset, test_dataset, val_dataset
 
 
-def get_preprocessed_image_set(path_low, path_high, n=-1):
-    return get_tensor_images_high_low(path_low, path_high, n)
+def get_preprocessed_image_set(path_low, path_high, n=-1, augment=False, num_augmentations = 3):
+    return get_tensor_images_high_low(path_low, path_high, n, augment, num_augmentations)
 
 
-def get_preprocessed_dataloader(lowPath, highPath, n=-1, bs=8, shuffle=True):
-    dataset = get_preprocessed_image_set(lowPath, highPath, n)
+def get_preprocessed_dataloader(lowPath, highPath, n=-1, bs=8, shuffle=True, augment=False, num_augmentations = 3):
+    dataset = get_preprocessed_image_set(lowPath, highPath, n, augment, num_augmentations)
     train_dl = DataLoader(dataset, batch_size=bs, shuffle=shuffle)
     return train_dl
 
 
 # This function works on preprocessed data
-def get_tensor_images_high_low(path_low, path_high, n=-1):
+def get_tensor_images_high_low(path_low, path_high, n=-1, augment=False, num_augmentations = 3):
+    start_time = time.time()
     images_low = []
     images_high = []
     pil_tensor_converter = transforms.ToTensor()
@@ -795,8 +809,39 @@ def get_tensor_images_high_low(path_low, path_high, n=-1):
     # high_res_stack = torch.stack(images_high)
 
     # return TensorDataset(low_res_stack, high_res_stack)
-    return ImageDataset(images_low, images_high)
+    # return ImageDataset(images_low, images_high)
 
+
+    if augment:
+        dataset =  get_augmented_tensor_images_high_low(images_low, images_high, num_augmentations)
+        print("Time to get dataset: " + str(time.time() - start_time))
+        return dataset
+    else:
+        print("Time to get dataset: " + str(time.time() - start_time))
+        return ImageDataset(images_low, images_high)
+
+def get_augmented_tensor_images_high_low(images_low, images_high, num_augmentations):
+    
+    new_images_low = []
+    new_images_high = []
+
+    for i in range(len(images_low)):
+        low_image = images_low[i]
+        high_image = images_high[i]
+        
+        # Add the original images
+        new_images_low.append(low_image)
+        new_images_high.append(high_image)
+
+        # Add num_augmentations augmented images
+        for j in range(num_augmentations):
+            aug_low, aug_high = apply_image_transformations(low_image, high_image, degrees = 90 * (j+1))
+            new_images_low.append(aug_low)
+            new_images_high.append(aug_high)
+        if(i%1000 == 0):
+            print("Whew, 1000 more have been completed")
+    
+    return ImageDataset(new_images_low, new_images_high)
 
 def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
     path = "./Datasets/Set19/OriginalCropx3/*"
@@ -851,25 +896,25 @@ def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
     upscaled_dataloader = DataLoader(upscaled_img_ds, batch_size=1, shuffle=False)
     return lr_dataloader, upscaled_dataloader, picture_names
 
-def apply_image_transformations(input, target):
+def apply_image_transformations(input, target, degrees = 0):
     seed = random.randrange(0, 100000)
-    jitter = transforms.ColorJitter(brightness=0.5, contrast=0.7, saturation=0.7, hue=0.5)
-    verticalFlip = transforms.RandomVerticalFlip(p=0.2)
-    horizontalFlip = transforms.RandomHorizontalFlip(p=0.2)
+    jitter = transforms.ColorJitter(brightness=0.5, contrast=0.85, saturation=0.9, hue=0.5)
+    horizontalFlip = transforms.RandomHorizontalFlip(p=0.5)
     greyscale = transforms.RandomGrayscale(p=0.1)
-    randjitter = transforms.RandomApply(nn.ModuleList([jitter]), p=0.2)
-    
-    #TODO: Rotations
+    randjitter = transforms.RandomApply(nn.ModuleList([jitter]), p=1)
 
     torch.random.manual_seed(seed)
     random.seed(seed)
-    # transformedInput = greyscale(horizontalFlip(verticalFlip(randjitter(input))))
-    transformedInput = transforms.Lambda(lambda x: torch.stack([greyscale(horizontalFlip(verticalFlip(randjitter(x_)))) for x_ in x]))(input)
+    transformedInput = greyscale(horizontalFlip(randjitter(input)))
+    # transformedInput = transforms.Lambda(lambda x: torch.stack([greyscale(horizontalFlip(verticalFlip(randjitter(x_)))) for x_ in x]))(input)
     torch.random.manual_seed(seed)
     random.seed(seed)
-    # transformedTarget = greyscale(horizontalFlip(verticalFlip(randjitter(target))))
-    transformedTarget = transforms.Lambda(lambda x: torch.stack([greyscale(horizontalFlip(verticalFlip(randjitter(x_)))) for x_ in x]))(target)
+    transformedTarget = greyscale(horizontalFlip(randjitter(target)))
+    # transformedTarget = transforms.Lambda(lambda x: torch.stack([greyscale(horizontalFlip(verticalFlip(randjitter(x_)))) for x_ in x]))(target)
 
+    # Rotatus maximus
+    transformedInput = transforms.functional.rotate(transformedInput, degrees)
+    transformedTarget = transforms.functional.rotate(transformedTarget, degrees)
 
     return transformedInput, transformedTarget
 
@@ -904,20 +949,20 @@ def evaluateModel(model, lr_dl, upscaled_dl, picture_numbers, show_images=True):
 
 
 def main():
-    bs = 128
-    epochs = 300
+    bs = 16
+    epochs = 100
 
-    train_dl, test_dl = loadFSRCNNdata(bs=bs)
-    model, loss_func, optim, load_path = setupFSRCNN(load_model=False, lr=0.001, load_path="FSRCNNDataAug")
-    # summary(model, input_size=(3,11,11))
+    #train_dl, test_dl = loadFSRCNNdata(bs=bs, augment=True, num_augmentations=3)
+    model, loss_func, optim, load_path = setupBigNet(load_model=True, lr=0.0001, load_path="BigNet")
+    #summary(model, input_size=(3,11,11))
     
     #model = BicubicBaseline().cuda()
-    fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path)
+    #fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path)
     
     #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs)
 
 
-    lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["ppt3", "monarch", "comic"])
+    lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["baboon"])
 
     evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
 

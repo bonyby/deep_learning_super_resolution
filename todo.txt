@@ -23,6 +23,37 @@ Data augmentation:
 
 
 
+Modeller vi skal have trænet:
+1. Baseline SRCNN (med eller uden padding?)
+2. FSRCNN - uden data augmentation (relu eller prelu)
+3. FSRCNN - m=6 uden data augmentation - vi øger lagene - hvad sker der?
+4. BRFSRCNN - med data augmentation 
+5. BigNet - med data augmentation (MAE error)
+
+--- Skal vi køre med LR scheduler eller ej? Cirka hvert 40/50 epoke
+--- Hvad sker der fra model til model? Hvorfor ændrer vi hvad vi ændrer?
+--- Overvejelser om weight initialization
+--- Data preprocessing metodik
+--- Batch normalization eller ej?
+--- Adam eller ej?
+--- Har vi hyperparameters? Analyse? Evt. på FSRCNN - hvilke parameters har vi på de forskellige modeller? Kan vi undersøge effekten?
+--- Transfer learning: Evt. BigNet x2 pre training
+
+
+
+
+Nyt:
+1. Batch Normalization er ikke så godt (EDSR, MDSR)
+2. SSIM
+3. Residual Dense Blocks
+
+RDN: https://arxiv.org/pdf/1802.08797.pdf
+EDSR: https://arxiv.org/pdf/1707.02921.pdf
+Overall artikel: https://arxiv.org/pdf/1808.03344.pdf
+
+
+
+
 
 Spørgsmål:
 - Datasets i collab? https://stackoverflow.com/questions/71619540/how-to-upload-a-62-gb-datasets-to-google-colab
