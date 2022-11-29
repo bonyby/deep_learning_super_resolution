@@ -49,7 +49,7 @@ def loss_batch(model, loss_func, xb, yb, opt=None):
 
     predictions_unclamped = model(xb.cuda())
     loss = loss_func(predictions_unclamped, yb.cuda())
-    psnr = PSNRaccuracy(predictions_unclamped.clamp(0, 1), yb.cuda())
+    psnr = PSNRaccuracy(predictions_unclamped.clamp(0, 1), yb.cuda()) #TODO: Clamp her??
 
     if opt is not None:
         loss.backward()
@@ -58,8 +58,15 @@ def loss_batch(model, loss_func, xb, yb, opt=None):
 
     return loss.item(), len(xb), psnr
 
+#Identity lr_scheduler for fit2
+def base_lr_scheduler(t, T, lr):
+    return lr
 
-def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN"):
+#Identity lr_scheduler for fit
+def base_lr_schedule(curr_epoch, epoch_batches, num_epochs, lr):
+    return lr
+
+def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", load_model=False, lr_scheduler=None):
     num_batches = len(train_dl)
     # Total number of batches
     num_elements = len(train_dl.dataset)
@@ -68,11 +75,30 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN"):
 
     val_psnr_history = []
     training_psnr_history = []
+    val_loss_history = []
+    training_loss_history = []
+
     t_counter = 0
     t = []
 
+    #TODO make pipeline use the load_model parameter so that this actually happens - test it
+    if(load_model):
+        t = np.load("./Models/" + save_path + "_T_val.npy").tolist()
+        t_counter = t[len(t)-1]
+        val_psnr_history = np.load("./Models/" + save_path + "_val_psnr.npy").tolist()
+        training_psnr_history = np.load("./Models/" + save_path + "_training_psnr.npy").tolist()
+        val_loss_history = np.load("./Models/" + save_path + "_val_loss.npy").tolist()
+        training_loss_history = np.load("./Models/" + save_path + "_training_loss.npy").tolist()
+
     for epoch in range(epochs):
         model.train()  # Sets the mode of the model to training
+
+        if lr_scheduler is not None:
+            # Update learning rate
+            opt.param_groups[0]['lr'] = lr_scheduler(
+                epoch, num_batches, epochs, lr=opt.param_groups[0]['lr'])
+
+
         # for xb, yb in train_dl:
         #    loss_batch(model, loss_func, xb, yb, opt)
         loss_losses, loss_nums, loss_psnrs = zip(
@@ -94,18 +120,29 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN"):
 
         training_psnr_history.append(train_psnr)
         val_psnr_history.append(val_psnr)
+        training_loss_history.append(train_loss)
+        val_loss_history.append(val_loss)
         t_counter += 1
         t.append(t_counter)
 
         # print("Epoch: " + str(epoch) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
         # print("Epoch: " + str(epoch) + " Train loss: " + str(train_loss) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
-        print("Epoch: " + str(epoch) + " Train loss: " + str(train_loss) + " Train PSNR: " +
+        print("Epoch: " + str(t_counter) + " Train loss: " + str(train_loss) + " Train PSNR: " +
               str(train_psnr) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
 
         if (epoch + 1) % 25 == 0:
             # Save the model
             print("Saving model weights...")
             torch.save(model.state_dict(), "./Models/" + save_path + ".pth")
+
+            #Save the graphed results:
+            print("Saving graphs...")
+            np.save("./Models/" + save_path + "_T_val.npy", t)
+            np.save("./Models/" + save_path + "_val_psnr.npy", val_psnr_history)
+            np.save("./Models/" + save_path + "_training_psnr.npy", training_psnr_history)
+            np.save("./Models/" + save_path + "_val_loss.npy", val_loss_history)
+            np.save("./Models/" + save_path + "_training_loss.npy", training_loss_history)
+
 
     plt.figure()
     lines = []
@@ -127,10 +164,8 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN"):
     plt.show()
 
 
-# Function handle that updates the learning rate
-# (note this is a dummy implementation that does nothing)
-def base_lr_scheduler(t, T, lr):
-    return lr
+
+
 
 
 def PSNRaccuracy(scores, yb, max_val=1):
@@ -142,18 +177,9 @@ def PSNRaccuracy(scores, yb, max_val=1):
     diff_flat = torch.flatten(diff, start_dim=1)
     #print("Max value: ", str(yb.max()))
     rmse = torch.sqrt(torch.mean(torch.square(diff_flat)))
-    # 10 * log_10(MAX_I^2/MSE)
-    # divres = 1/mse
-    # logres = torch.log10(divres)
-    # mulres = 10 * logres
-    # return mulres
 
     return Tensor([20 * math.log(max_val/rmse, 10)])
 
-    # return Tensor([0.5])
-    #score2prob = nn.Softmax(dim=1)
-    #preds = torch.argmax(score2prob(scores), dim=1)
-    # return (preds == yb).float().mean()
 
 #fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN")
 def fit2(model,
@@ -302,47 +328,15 @@ def MAE(input, target):
     mae = F.l1_loss
     return mae(input, target)
 
-def MSE_Single(input, target):
-    # Calculate MSE
-    inputNp = input.clone()
-    inputNp = inputNp.detach().numpy()
-    targetNp = target.clone()
-    targetNp = targetNp.detach().numpy()
-
-    loss = np.sum((inputNp - targetNp) ** 2)
-    loss /= (input.size(dim=0) * input.size(dim=1) * input.size(dim=2))
-    return loss
 
 
-def SRCNN(scale):
-    # This model has 8129 parameters when channels = 1 (20099 when channels = 3) including bias, 8032 without - which is as in the article.
-    channels = 3
-    n1 = 64
-    n2 = 32
-    f1 = 9
-    f2 = 1
-    f3 = 5
-
-    model = nn.Sequential(
-        # Preprocessing with bicubic interpolation
-        nn.Upsample(scale_factor=scale, mode='bicubic', align_corners=False),
-
-        # Model
-        nn.Conv2d(channels, n1, (f1, f1)),
-        nn.ReLU(),
-        nn.Conv2d(n1, n2, (f2, f2)),
-        nn.ReLU(),
-        nn.Conv2d(n2, channels, (f3, f3)),
-        # nn.ReLU() #this should not be here - it is the last layer!
-    )
-
-    return model
 
 
 class ModularSRCNN(nn.Module):
 
+    # This model has 8129 parameters when channels = 1 (20099 when channels = 3) including bias, 8032 without - which is as in the article.
+
     def __init__(self):
-        # This model has 8129 parameters when channels = 1 (20099 when channels = 3) including bias, 8032 without - which is as in the article.
         channels = 3
         n1 = 64
         n2 = 32
@@ -452,6 +446,11 @@ class ModularFSRCNN(nn.Module):
         #print("x after deconv size: " + str(x.size()))
 
         return x
+
+
+
+
+
 
 class BRFSRCNN(nn.Module):
     def __init__(self):
@@ -710,6 +709,7 @@ def adam_SGD_BigNet(model, lr=0.001):
 def reset_parameters(net):
     '''Init layer parameters.'''
     counter = 0
+    print("Resetting parameters...")
     for m in net.modules():
         if isinstance(m, nn.Conv2d):
             #torch.nn.init.normal_(m.weight, mean=0, std=0.001)
@@ -725,7 +725,7 @@ def reset_parameters(net):
             torch.nn.init.kaiming_normal_(m.weight)
             if m.bias is not None:
                 torch.nn.init.constant_(m.bias, 0)
-        print("Reseting layer: " + str(counter))
+        #print("Reseting layer: " + str(counter))
         counter += 1
     
 
@@ -945,26 +945,76 @@ def evaluateModel(model, lr_dl, upscaled_dl, picture_numbers, show_images=True):
         counter2 += 1
 
 
+layer_output = {}
+def get_activation(layer):
+    def hook(model, input, output):
+        layer_output[layer] = output.detach()
+    return hook
+
+
+def evaluateLayers(model, lr_dl, picture_numbers):
+    model.eval()
+
+    counter1 = 0
+    for xb, yb in lr_dl:
+        input = xb.cuda()[None, 0]
+        result = model(input)
+        clampedResult = result.clamp(0, 1)
+
+        print("Model has run on picture ", picture_numbers[counter1])
+        counter1 += 1
+        return
+
 # ------------------- CODE -------------------
 
 
 def main():
-    bs = 16
-    epochs = 100
+    bs = 128 #16 for bignet, 128 for rest
+    epochs = 28
+    load_model = True
 
-    #train_dl, test_dl = loadFSRCNNdata(bs=bs, augment=True, num_augmentations=3)
-    model, loss_func, optim, load_path = setupBigNet(load_model=True, lr=0.0001, load_path="BigNet")
+
+    
+
+
+    #train_dl, test_dl = loadFSRCNNdata(bs=bs, augment=False, num_augmentations=3)
+    model, loss_func, optim, load_path = setupFSRCNN(load_model=load_model, lr=0.0001, load_path="FSRCNNDataAug")
     #summary(model, input_size=(3,11,11))
     
     #model = BicubicBaseline().cuda()
-    #fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path)
+    #fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path, load_model=load_model, lr_scheduler = base_lr_schedule)
     
     #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs)
 
 
     lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["baboon"])
 
-    evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
+    model.conv1.register_forward_hook(get_activation('conv1'))
+    model.conv2.register_forward_hook(get_activation('conv2'))
+    model.relum4.register_forward_hook(get_activation('relum4'))
+    evaluateLayers(model, lr_dl, picture_numbers)
+    layer_val = layer_output['conv2']
+    layer = layer_val.size()
+    num_feature_maps = layer_val.size(dim=1)
+    x_dim = math.floor(math.sqrt(num_feature_maps))
+    y_dim = math.ceil(num_feature_maps/x_dim)
+
+    output_feature_array = np.zeros((x_dim*layer[2], y_dim*layer[3]))
+    print("output_feature_tensor shape:", str(output_feature_array.shape))
+    counter = 0
+    for i in range(x_dim):
+        for j in range(y_dim):
+            add_val = layer_val[0][counter].cpu().numpy()
+            output_feature_array[i*layer[2]:(i+1)*layer[2], j*layer[3]:(j+1)*layer[3]] += add_val
+            
+            counter += 1
+
+    output_feature_tensor = torch.from_numpy(output_feature_array)
+    show_tensor_as_image(output_feature_tensor)
+    
+    
+    
+    #evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
 
 if __name__ == "__main__":
     main()
