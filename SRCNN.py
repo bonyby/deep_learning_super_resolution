@@ -960,10 +960,59 @@ def evaluateLayers(model, lr_dl, picture_numbers):
         input = xb.cuda()[None, 0]
         result = model(input)
         clampedResult = result.clamp(0, 1)
-
+        #print("input_shape:", str(input.size()))
         print("Model has run on picture ", picture_numbers[counter1])
         counter1 += 1
         return
+
+def display_kernel_weights(kernel_weights):
+    kernel_shape = kernel_weights.size()
+    print("kernel_shape", str(kernel_shape))
+    kernel_x_dim = math.floor(math.sqrt(kernel_shape[0]))
+    kernel_y_dim = math.ceil(kernel_shape[0]/kernel_x_dim)
+
+    kernel_array = np.zeros((kernel_shape[1], kernel_x_dim*kernel_shape[2] + kernel_x_dim, kernel_y_dim*kernel_shape[3] + kernel_y_dim))
+    print("kernel_array shape:", str(kernel_array.shape))
+    counter_kernel = 0
+    for i in range(kernel_x_dim):
+        for j in range(kernel_y_dim):
+            add_val = kernel_weights[counter_kernel].detach().cpu().numpy()
+            kernel_array[:,i*kernel_shape[2] + i:(i+1)*kernel_shape[2] + i, j*kernel_shape[3] + j:(j+1)*kernel_shape[3] + j] += add_val
+            
+            counter_kernel += 1
+
+    #print("Kernel weights:", str(kernel_weights[2]))
+    #show_tensor_as_image(kernel_weights[2].clamp(0,1))
+    kernel_tensor = torch.from_numpy(kernel_array)
+    show_tensor_as_image(kernel_tensor)
+
+
+
+def display_feature_maps(layer_val):
+    layer = layer_val.size()
+    num_feature_maps = layer_val.size(dim=1)
+    x_dim = math.floor(math.sqrt(num_feature_maps))
+    y_dim = math.ceil(num_feature_maps/x_dim)
+
+    print("layer shape", str(layer), "x_dim", x_dim, "y_dim", y_dim)
+
+    output_feature_array = np.zeros((x_dim*layer[2], y_dim*layer[3]))
+    
+
+    print("output_feature_tensor shape:", str(output_feature_array.shape))
+    counter = 0
+    for i in range(x_dim):
+        for j in range(y_dim):
+            if counter >= num_feature_maps:
+                break
+            
+            add_val = layer_val[0][counter].cpu().numpy()
+            output_feature_array[i*layer[2]:(i+1)*layer[2], j*layer[3]:(j+1)*layer[3]] += add_val
+            
+            counter += 1
+
+    output_feature_tensor = torch.from_numpy(output_feature_array)
+    show_tensor_as_image(output_feature_tensor)
 
 # ------------------- CODE -------------------
 
@@ -978,7 +1027,7 @@ def main():
 
 
     #train_dl, test_dl = loadFSRCNNdata(bs=bs, augment=False, num_augmentations=3)
-    model, loss_func, optim, load_path = setupFSRCNN(load_model=load_model, lr=0.0001, load_path="FSRCNNDataAug")
+    model, loss_func, optim, load_path = setupSRCNN(load_model=load_model, lr=0.0001, load_path="SRCNN")
     #summary(model, input_size=(3,11,11))
     
     #model = BicubicBaseline().cuda()
@@ -991,28 +1040,18 @@ def main():
 
     model.conv1.register_forward_hook(get_activation('conv1'))
     model.conv2.register_forward_hook(get_activation('conv2'))
-    model.relum4.register_forward_hook(get_activation('relum4'))
-    evaluateLayers(model, lr_dl, picture_numbers)
+    #model.relum4.register_forward_hook(get_activation('relum4'))
+    evaluateLayers(model, upscaled_dl, picture_numbers)
+    
+
+    #Choose layer to look at
     layer_val = layer_output['conv2']
-    layer = layer_val.size()
-    num_feature_maps = layer_val.size(dim=1)
-    x_dim = math.floor(math.sqrt(num_feature_maps))
-    y_dim = math.ceil(num_feature_maps/x_dim)
+    display_feature_maps(layer_val)
 
-    output_feature_array = np.zeros((x_dim*layer[2], y_dim*layer[3]))
-    print("output_feature_tensor shape:", str(output_feature_array.shape))
-    counter = 0
-    for i in range(x_dim):
-        for j in range(y_dim):
-            add_val = layer_val[0][counter].cpu().numpy()
-            output_feature_array[i*layer[2]:(i+1)*layer[2], j*layer[3]:(j+1)*layer[3]] += add_val
-            
-            counter += 1
-
-    output_feature_tensor = torch.from_numpy(output_feature_array)
-    show_tensor_as_image(output_feature_tensor)
     
-    
+    #Look at first layer of conv filters
+    kernel_weights = model.conv1.weight
+    display_kernel_weights(kernel_weights)
     
     #evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
 
