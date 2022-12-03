@@ -28,6 +28,7 @@ from BigNet import BigNet
 # https://medium.com/coinmonks/review-srcnn-super-resolution-3cb3a4f67a7c
 
 #
+angles = [0, 90, 180, 270]
 
 class ImageDataset(Dataset):
     def __init__(self, imagesList_lr, imagesList_hr):
@@ -43,13 +44,13 @@ class ImageDataset(Dataset):
             self.imagesList_hr[index]
         )
 
-
-def loss_batch(model, loss_func, xb, yb, opt=None):
-    #xbTransformed, ybTransformed = apply_image_transformations(xb, yb)
+def loss_batch(model, loss_func, xb, yb, opt=None, data_augmentation=False):
+    if data_augmentation:
+        xb,yb = apply_image_transformations(xb,yb)
 
     predictions_unclamped = model(xb.cuda())
     loss = loss_func(predictions_unclamped, yb.cuda())
-    psnr = PSNRaccuracy(predictions_unclamped.clamp(0, 1), yb.cuda()) #TODO: Clamp her??
+    psnr = PSNRaccuracy(predictions_unclamped.clamp(0, 1), yb.cuda())
 
     if opt is not None:
         loss.backward()
@@ -59,29 +60,69 @@ def loss_batch(model, loss_func, xb, yb, opt=None):
     return loss.item(), len(xb), psnr
 
 #Identity lr_scheduler for fit2
-def base_lr_scheduler(t, T, lr):
-    return lr
 
 #Identity lr_scheduler for fit
-def base_lr_schedule(curr_epoch, epoch_batches, num_epochs, lr):
+
+class base_lr_schedule():
+    def update_learning_rate(self, curr_epoch, curr_batch, epoch_batches, num_epochs, lr):
+        return lr
+
+#def base_lr_schedule(curr_epoch, curr_batch, epoch_batches, num_epochs, lr):
+#    return lr
+
+def opt_lr_finding_schedule(curr_epoch, curr_batch, epoch_batches, num_epochs, lr):
+    #print("lr:", lr)
+    min_lr = 0.000001
+    max_lr = 0.1
+    step_size = abs(math.log(max_lr/min_lr) / (epoch_batches*num_epochs))
+    if(lr > max_lr):
+        return lr + 0.000001
+    lr = math.e**(math.log(lr)+step_size*2)
     return lr
 
-def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", load_model=False, lr_scheduler=None):
+
+class cyclic_lr_schedule:
+    def __init__(self, max_lr, min_lr, cycle_length=20):
+        self.max_lr = max_lr
+        self.min_lr = min_lr
+        self.cycle_length = cycle_length
+
+    def update_learning_rate(self, curr_epoch, curr_batch, epoch_batches, num_epochs, lr):
+        cycle_length_epochs = self.cycle_length
+        if curr_epoch % cycle_length_epochs == 0 and curr_epoch != 0:
+            if self.max_lr > 2* self.min_lr:
+                print("Updating max...")
+                self.max_lr = self.max_lr * 0.5
+        step_size = (self.max_lr - self.min_lr) / (cycle_length_epochs / 2)
+        mod_val = curr_epoch % cycle_length_epochs
+        if mod_val < 10:
+            print("step_size:", step_size, "mod val:", mod_val, "curr_epoch", curr_epoch, "cyclelengthepochs", cycle_length_epochs)
+            lr = self.min_lr + mod_val * step_size
+            print("lr", lr)
+        else:
+            print("step_size:", step_size, "mod val:", mod_val)
+            lr = self.max_lr - (mod_val - 10) * step_size
+            print("lr", lr)
+        return lr
+
+
+
+
+def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", load_model=False, lr_scheduler=None, data_augmentation=False):
     num_batches = len(train_dl)
     # Total number of batches
     num_elements = len(train_dl.dataset)
-
+    load_state =  "preloaded" if load_model else "new" 
+    print("Running Fit with", load_state, "model:", str(type(model).__name__), "and data augmentation set to", data_augmentation)
     print('Epochs:', epochs, 'Total number of batches', num_batches, 'Total number of elements', num_elements)
 
     val_psnr_history = []
     training_psnr_history = []
     val_loss_history = []
     training_loss_history = []
-
     t_counter = 0
     t = []
 
-    #TODO make pipeline use the load_model parameter so that this actually happens - test it
     if(load_model):
         t = np.load("./Models/" + save_path + "_T_val.npy").tolist()
         t_counter = t[len(t)-1]
@@ -95,14 +136,17 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", l
 
         if lr_scheduler is not None:
             # Update learning rate
-            opt.param_groups[0]['lr'] = lr_scheduler(
-                epoch, num_batches, epochs, lr=opt.param_groups[0]['lr'])
+            for param_group in opt.param_groups:
+                new_lr = lr_scheduler.update_learning_rate(
+                    t_counter, 0, num_batches, epochs, lr=param_group['lr'])
+                print("New lr:", new_lr)
+                param_group['lr'] = new_lr
 
 
         # for xb, yb in train_dl:
         #    loss_batch(model, loss_func, xb, yb, opt)
         loss_losses, loss_nums, loss_psnrs = zip(
-            *[loss_batch(model, loss_func, xb, yb, opt) for xb, yb in train_dl]
+            *[loss_batch(model, loss_func, xb, yb, opt, data_augmentation=data_augmentation) for xb, yb in train_dl]
         )
 
         train_loss = np.sum(np.multiply(
@@ -165,6 +209,18 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", l
 
 
 
+def testModel(model, loss_func, testset_dl):
+    model.eval()
+
+    with torch.no_grad():
+            losses, nums, test_psnrs = zip(
+                *[loss_batch(model, loss_func, xb, yb) for xb, yb in testset_dl]
+            )
+    test_loss = np.sum(np.multiply(losses, nums)) / np.sum(nums)
+    test_psnr = np.sum(test_psnrs) / len(test_psnrs)  # average PSNR per batch
+
+    print("Test loss: " + str(test_loss) + " Test PSNR: " +  str(test_psnr))
+    
 
 
 
@@ -172,7 +228,8 @@ def PSNRaccuracy(scores, yb, max_val=1):
     # crop_transform = transforms.CenterCrop(
     #     size=(scores.size(dim=2), scores.size(dim=3)))
     # yb_cropped = crop_transform(yb)
-
+    #print("Scores size", scores.size())
+    #print("yb size", yb.size())
     diff = scores - yb
     diff_flat = torch.flatten(diff, start_dim=1)
     #print("Max value: ", str(yb.max()))
@@ -181,7 +238,7 @@ def PSNRaccuracy(scores, yb, max_val=1):
     return Tensor([20 * math.log(max_val/rmse, 10)])
 
 
-#fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN")
+#This is used to find optimal learning rate ranges since we can work on a per-batch basis
 def fit2(model,
          loss_func,
          opt,
@@ -190,13 +247,13 @@ def fit2(model,
          epochs=1,
          accuracy=PSNRaccuracy,
          batch_prints=False,
-         lr_scheduler=base_lr_scheduler,
+         lr_scheduler=base_lr_schedule,
          batches_per_epoch=None,  # Default: Use entire training set
          show_summary=True):
 
     bs = trainset.batch_size
-    num_batches = len(train_dl)
-
+    num_batches = len(trainset)
+    learning_rate = []
 
     # Set up data loaders
     if batches_per_epoch == None:
@@ -213,6 +270,7 @@ def fit2(model,
         dataset = trainset.dataset        
         train_dl = DataLoader(dataset, batch_size=bs, sampler=torch.utils.data.sampler.SubsetRandomSampler(subset_indices), shuffle=True)
         valid_dl = testset
+        num_batches = len(train_dl)
 
 
     # For book keeping
@@ -246,8 +304,13 @@ def fit2(model,
         for xb, yb in train_dl:
 
             # Update learning rate
-            opt.param_groups[0]['lr'] = lr_scheduler(
-                t, T, lr=opt.param_groups[0]['lr'])
+            if lr_scheduler is not None:
+            # Update learning rate
+                for param_group in opt.param_groups:
+                    new_lr = lr_scheduler(
+                        epoch, t, batches_per_epoch, epochs, lr=param_group['lr'])
+                    param_group['lr'] = new_lr
+                learning_rate.append(opt.param_groups[0]['lr'])
 
             # Forward prop
             pred = model(xb.cuda())
@@ -310,8 +373,23 @@ def fit2(model,
         plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
         plt.show()
 
-    return train_loss_history
+    if lr_scheduler == opt_lr_finding_schedule:
+        plt.figure()
+        lines = []
+        labels = []
+        l, = plt.plot(learning_rate, train_loss_history)
+        lines.append(l)
+        labels.append("Loss")
+        plt.xlabel('Learning Rate')
+        plt.ylabel('Loss')
+        plt.ticklabel_format(axis='x', style='scientific')
+        plt.xscale('log')
+        plt.ylim([0, 1.5])
+        plt.title('Learning rate analysis')
+        plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
+        plt.show()
 
+    return train_loss_history
 
 def MSE(input, target):
     # Crop the target to the input size - the input loses some of it's size as the model doesn't use any padding
@@ -322,15 +400,10 @@ def MSE(input, target):
     mse = F.mse_loss
     return mse(input, tgt)
 
-
 #Computes the absolute difference between the pixel values (instead of the squared difference)
 def MAE(input, target):
     mae = F.l1_loss
     return mae(input, target)
-
-
-
-
 
 class ModularSRCNN(nn.Module):
 
@@ -346,11 +419,11 @@ class ModularSRCNN(nn.Module):
 
         super(ModularSRCNN, self).__init__()
 
-        self.conv1 = nn.Conv2d(channels, n1, (f1, f1))
+        self.conv1 = nn.Conv2d(channels, n1, (f1, f1), padding=4)
         self.relu1 = nn.ReLU()
         self.conv2 = nn.Conv2d(n1, n2, (f2, f2))
         self.relu2 = nn.ReLU()
-        self.conv3 = nn.Conv2d(n2, channels, (f3, f3))
+        self.conv3 = nn.Conv2d(n2, channels, (f3, f3), padding=2)
         #self.relu3 = nn.ReLU()
 
         self.params = nn.ModuleDict({
@@ -598,15 +671,15 @@ def setupSRCNN(load_model=False, load_path="SRCNN", lr=0.001):
     return model, loss_func, optim, load_path
 
 
-def loadSRCNNdata(bs=128, n=-1, scale=3, augment=False, num_augmentations=3):
+def loadSRCNNdata(bs=128, n=-1, scale=3):
     if(scale == 3):
         train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_Upscaled_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs, augment=augment, num_augmentations=num_augmentations)
+            "./Datasets/T91/T91_Upscaled_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
         test_dl = get_preprocessed_dataloader(
             "./Datasets/Set19/Upscaled_x3gaussPIL", "./Datasets/Set19/OriginalCropx3", bs=1)
     elif(scale == 2):
         train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_Upscaled_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs, augment=augment, num_augmentations=num_augmentations)
+            "./Datasets/T91/T91_Upscaled_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs)
         test_dl = get_preprocessed_dataloader(
             "./Datasets/Set19/Blurred_x2", "./Datasets/Set19/Original", bs=1)
     return train_dl, test_dl
@@ -651,15 +724,15 @@ def setupBigNet(load_model=False, load_path="BigNet", lr=0.0001):
 
     return model, loss_func, optim, load_path
 
-def loadFSRCNNdata(bs=128, n=-1, scale=3, augment=False, num_augmentations=3):
+def loadFSRCNNdata(bs=128, n=-1, scale=3):
     if(scale == 3):
         train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_LR_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs, augment=augment, num_augmentations=num_augmentations)
+            "./Datasets/T91/T91_LR_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
         test_dl = get_preprocessed_dataloader(
             "./Datasets/Set19/LR_x3gaussPIL", "./Datasets/Set19/OriginalCropx3", bs=1, shuffle=False)
     elif(scale == 2):
         train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_LR_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs, augment=augment, num_augmentations=num_augmentations)
+            "./Datasets/T91/T91_LR_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs)
         test_dl = get_preprocessed_dataloader(
             "./Datasets/Set19/LR_x2", "./Datasets/Set19/Original", bs=1, shuffle=False)
     return train_dl, test_dl
@@ -762,18 +835,18 @@ def get_preprocessed_image_sets(path_low, path_high, n=-1):
     return train_dataset, test_dataset, val_dataset
 
 
-def get_preprocessed_image_set(path_low, path_high, n=-1, augment=False, num_augmentations = 3):
-    return get_tensor_images_high_low(path_low, path_high, n, augment, num_augmentations)
+def get_preprocessed_image_set(path_low, path_high, n=-1):
+    return get_tensor_images_high_low(path_low, path_high)
 
 
-def get_preprocessed_dataloader(lowPath, highPath, n=-1, bs=8, shuffle=True, augment=False, num_augmentations = 3):
-    dataset = get_preprocessed_image_set(lowPath, highPath, n, augment, num_augmentations)
+def get_preprocessed_dataloader(lowPath, highPath, n=-1, bs=8, shuffle=True):
+    dataset = get_preprocessed_image_set(lowPath, highPath, n)
     train_dl = DataLoader(dataset, batch_size=bs, shuffle=shuffle)
     return train_dl
 
 
 # This function works on preprocessed data
-def get_tensor_images_high_low(path_low, path_high, n=-1, augment=False, num_augmentations = 3):
+def get_tensor_images_high_low(path_low, path_high, n=-1):
     start_time = time.time()
     images_low = []
     images_high = []
@@ -811,37 +884,8 @@ def get_tensor_images_high_low(path_low, path_high, n=-1, augment=False, num_aug
     # return TensorDataset(low_res_stack, high_res_stack)
     # return ImageDataset(images_low, images_high)
 
-
-    if augment:
-        dataset =  get_augmented_tensor_images_high_low(images_low, images_high, num_augmentations)
-        print("Time to get dataset: " + str(time.time() - start_time))
-        return dataset
-    else:
-        print("Time to get dataset: " + str(time.time() - start_time))
-        return ImageDataset(images_low, images_high)
-
-def get_augmented_tensor_images_high_low(images_low, images_high, num_augmentations):
-    
-    new_images_low = []
-    new_images_high = []
-
-    for i in range(len(images_low)):
-        low_image = images_low[i]
-        high_image = images_high[i]
-        
-        # Add the original images
-        new_images_low.append(low_image)
-        new_images_high.append(high_image)
-
-        # Add num_augmentations augmented images
-        for j in range(num_augmentations):
-            aug_low, aug_high = apply_image_transformations(low_image, high_image, degrees = 90 * (j+1))
-            new_images_low.append(aug_low)
-            new_images_high.append(aug_high)
-        if(i%1000 == 0):
-            print("Whew, 1000 more have been completed")
-    
-    return ImageDataset(new_images_low, new_images_high)
+    print("Time to get dataset: " + str(time.time() - start_time))
+    return ImageDataset(images_low, images_high)
 
 def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
     path = "./Datasets/Set19/OriginalCropx3/*"
@@ -896,7 +940,7 @@ def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
     upscaled_dataloader = DataLoader(upscaled_img_ds, batch_size=1, shuffle=False)
     return lr_dataloader, upscaled_dataloader, picture_names
 
-def apply_image_transformations(input, target, degrees = 0):
+def apply_image_transformations(input, target):
     seed = random.randrange(0, 100000)
     jitter = transforms.ColorJitter(brightness=0.5, contrast=0.85, saturation=0.9, hue=0.5)
     horizontalFlip = transforms.RandomHorizontalFlip(p=0.5)
@@ -913,6 +957,7 @@ def apply_image_transformations(input, target, degrees = 0):
     # transformedTarget = transforms.Lambda(lambda x: torch.stack([greyscale(horizontalFlip(verticalFlip(randjitter(x_)))) for x_ in x]))(target)
 
     # Rotatus maximus
+    degrees = random.choice(angles)
     transformedInput = transforms.functional.rotate(transformedInput, degrees)
     transformedTarget = transforms.functional.rotate(transformedTarget, degrees)
 
@@ -984,7 +1029,7 @@ def display_kernel_weights(kernel_weights):
     #print("Kernel weights:", str(kernel_weights[2]))
     #show_tensor_as_image(kernel_weights[2].clamp(0,1))
     kernel_tensor = torch.from_numpy(kernel_array)
-    show_tensor_as_image(kernel_tensor)
+    show_tensor_as_image(kernel_tensor.clamp(0,1))
 
 
 
@@ -994,11 +1039,9 @@ def display_feature_maps(layer_val):
     x_dim = math.floor(math.sqrt(num_feature_maps))
     y_dim = math.ceil(num_feature_maps/x_dim)
 
-    print("layer shape", str(layer), "x_dim", x_dim, "y_dim", y_dim)
+    #print("layer shape", str(layer), "x_dim", x_dim, "y_dim", y_dim)
 
     output_feature_array = np.zeros((x_dim*layer[2], y_dim*layer[3]))
-    
-
     print("output_feature_tensor shape:", str(output_feature_array.shape))
     counter = 0
     for i in range(x_dim):
@@ -1019,41 +1062,42 @@ def display_feature_maps(layer_val):
 
 def main():
     bs = 128 #16 for bignet, 128 for rest
-    epochs = 28
-    load_model = True
+    epochs = 25
+    load_model = False
 
-
+    data_aug = False
     
 
 
-    #train_dl, test_dl = loadFSRCNNdata(bs=bs, augment=False, num_augmentations=3)
-    model, loss_func, optim, load_path = setupSRCNN(load_model=load_model, lr=0.0001, load_path="SRCNN")
+    train_dl, test_dl = loadSRCNNdata(bs=bs)
+    model, loss_func, optim, load_path = setupSRCNN(load_model=load_model, lr=0.0001, load_path="FSRCNN_With_DataAug")
     #summary(model, input_size=(3,11,11))
     
     #model = BicubicBaseline().cuda()
-    #fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path, load_model=load_model, lr_scheduler = base_lr_schedule)
+    fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path, load_model=load_model, lr_scheduler = base_lr_schedule, data_augmentation=data_aug)
     
-    #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs)
+    #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs, lr_scheduler=opt_lr_finding_schedule)
 
 
-    lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["baboon"])
+    lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["butterfly"])
 
     model.conv1.register_forward_hook(get_activation('conv1'))
-    model.conv2.register_forward_hook(get_activation('conv2'))
+    model.relu1.register_forward_hook(get_activation('relu1'))
+    model.relu2.register_forward_hook(get_activation('relu2'))
     #model.relum4.register_forward_hook(get_activation('relum4'))
-    evaluateLayers(model, upscaled_dl, picture_numbers)
+    #evaluateLayers(model, upscaled_dl, picture_numbers)
     
 
     #Choose layer to look at
-    layer_val = layer_output['conv2']
-    display_feature_maps(layer_val)
+    layer_val = layer_output['relu1']
+    #display_feature_maps(layer_val)
 
     
     #Look at first layer of conv filters
     kernel_weights = model.conv1.weight
-    display_kernel_weights(kernel_weights)
+    #display_kernel_weights(kernel_weights)
     
-    #evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
+    evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
 
 if __name__ == "__main__":
     main()

@@ -44,18 +44,13 @@ def makeBlurredImages(imagesPath, croppedPath, downscaledPath, blurredPath, scal
         crop_PIL = Image.fromarray(img)
         crop_PIL.save("./Datasets/" + croppedPath + "/" + name + ".png")
 
-        # low_res_img = cv2.resize(
-        #     img, (int(w*1/scale), int(h*1/scale)), interpolation=cv2.INTER_CUBIC)
-
-        # high_res_upscale = cv2.resize(
-        #     low_res_img, (neww, newh), interpolation=cv2.INTER_CUBIC)
 
         gaus_pic = gaussian_kernel(crop_PIL)
-        low_res = gaus_pic.resize(size=(w//scale,h//scale), resample=Image.BICUBIC)
-        upscaled = low_res.resize(size=(w,h), resample=Image.BICUBIC)
+        low_res = gaus_pic.resize(size=(neww//scale,newh//scale), resample=Image.BICUBIC)
+        upscaled = low_res.resize(size=(neww,newh), resample=Image.BICUBIC)
 
-        low_res.save("./Datasets/" + downscaledPath + "/" + name + "_blurred_" + ".png")
-        upscaled.save("./Datasets/" + blurredPath + "/" + name + "_LR" + ".png")
+        low_res.save("./Datasets/" + downscaledPath + "/" + name + "_LR" + ".png")
+        upscaled.save("./Datasets/" + blurredPath + "/" + name + "_Blurred" + ".png")
 
 
 def makeDatasetIntoPatchDataset(datasetPath, newPatchesPath, lowResPath, highResPath, scale):
@@ -120,8 +115,8 @@ def crop_center(img, cropx, cropy):
 # ----------- code ------------
 #makeDatasetIntoPatches("T91/T91_Original", "T91/T91_HR_Patches")
 #makeLowAndHighResPatches("T91/T91_HR_Patches", "T91/T91_LR_Patches", "T91/T91_Upscaled_Patches")
-makeDatasetIntoPatchDataset("T91/T91_Original", "T91/T91_HR_Patches", "T91/T91_LR_Patches_x3gaussPIL", "T91/T91_Upscaled_Patches_x3gaussPIL", scale=3)
-# makeBlurredImages("Set19/Original", "Set19/OriginalCropx3", "Set19/LR_gaussPIL", "Set19/Upscaled_gaussPIL", scale=3)
+#makeDatasetIntoPatchDataset("T91/T91_Original", "T91/T91_HR_Patches", "T91/T91_LR_Patches_x3gaussPIL", "T91/T91_Upscaled_Patches_x3gaussPIL", scale=3)
+#makeBlurredImages("Set19/Original", "Set19/OriginalCropx3", "Set19/LR_gaussPIL", "Set19/Upscaled_x3gaussPIL", scale=3)
 #makeBlurredImagesx2("Set19/Original", "Set19/LR_x2")
 
 #makeDatasetIntoPatchDatasetx2("T91/T91_Original", "T91/T91_HR_Patches_x2", "T91/T91_LR_Patches_x2", "T91/T91_Upscaled_Patches_x2")
