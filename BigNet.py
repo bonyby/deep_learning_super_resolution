@@ -123,3 +123,27 @@ class ResidualDenseBlock(nn.Module):
         #Skip-connection
         x = torch.add(x, identity)
         return x
+
+
+
+class UNetAttention(nn.Module):
+    def __init__(self, num_channels):
+        super(ResidualBlock, self).__init__()
+
+        structure = []
+        structure.append(nn.Conv2d(num_channels, num_channels, (3,3), padding=1, stride=1))
+        structure.append(nn.ReLU())
+        structure.append(nn.Conv2d(num_channels, num_channels, (3,3), padding=1, stride=1))
+
+        self.body = nn.Sequential(*structure)
+
+    def forward(self, x):
+        #Saving the identity for skip-connection
+        identity = x
+        
+        #Feeding through the body
+        x = self.body(x)
+
+        #Skip-connection
+        x = torch.add(x, identity)
+        return x

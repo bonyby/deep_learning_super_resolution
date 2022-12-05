@@ -45,8 +45,11 @@ class ImageDataset(Dataset):
         )
 
 def loss_batch(model, loss_func, xb, yb, opt=None, data_augmentation=False):
+    #print("xb max before:", torch.max(xb))
     if data_augmentation:
         xb,yb = apply_image_transformations(xb,yb)
+
+    #print("xb max fater:", torch.max(xb))
 
     predictions_unclamped = model(xb.cuda())
     loss = loss_func(predictions_unclamped, yb.cuda())
@@ -64,21 +67,26 @@ def loss_batch(model, loss_func, xb, yb, opt=None, data_augmentation=False):
 #Identity lr_scheduler for fit
 
 class base_lr_schedule():
+    def __init__(self):
+        pass
+
     def update_learning_rate(self, curr_epoch, curr_batch, epoch_batches, num_epochs, lr):
         return lr
 
-#def base_lr_schedule(curr_epoch, curr_batch, epoch_batches, num_epochs, lr):
-#    return lr
 
+#Tests learning rates between 10e-6 and 10e-1 such that the increments are even on a logarithmic scale on the learning rate
 def opt_lr_finding_schedule(curr_epoch, curr_batch, epoch_batches, num_epochs, lr):
     #print("lr:", lr)
-    min_lr = 0.000001
+    #min_lr for bignet:0.0000001, max_lr: 1
+    #min_lr for rest: 0.000001, max_lr: 0.1
+    min_lr = 0.0000001
     max_lr = 0.1
     step_size = abs(math.log(max_lr/min_lr) / (epoch_batches*num_epochs))
     if(lr > max_lr):
-        return lr + 0.000001
+        return lr + min_lr
     lr = math.e**(math.log(lr)+step_size*2)
     return lr
+
 
 
 class cyclic_lr_schedule:
@@ -122,14 +130,20 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", l
     training_loss_history = []
     t_counter = 0
     t = []
+    best_psnr = 0
+    best_weights = model.state_dict()        
 
     if(load_model):
-        t = np.load("./Models/" + save_path + "_T_val.npy").tolist()
+        try:
+            best_psnr = np.load("./Models/" + save_path + "_best_psnr.npy", allow_pickle=True)[0]
+        except:
+            best_psnr = 0
+        t = np.load("./Models/" + save_path + "_T_val.npy", allow_pickle=True).tolist()
         t_counter = t[len(t)-1]
-        val_psnr_history = np.load("./Models/" + save_path + "_val_psnr.npy").tolist()
-        training_psnr_history = np.load("./Models/" + save_path + "_training_psnr.npy").tolist()
-        val_loss_history = np.load("./Models/" + save_path + "_val_loss.npy").tolist()
-        training_loss_history = np.load("./Models/" + save_path + "_training_loss.npy").tolist()
+        val_psnr_history = np.load("./Models/" + save_path + "_val_psnr.npy", allow_pickle=True).tolist()
+        training_psnr_history = np.load("./Models/" + save_path + "_training_psnr.npy", allow_pickle=True).tolist()
+        val_loss_history = np.load("./Models/" + save_path + "_val_loss.npy", allow_pickle=True).tolist()
+        training_loss_history = np.load("./Models/" + save_path + "_training_loss.npy", allow_pickle=True).tolist()
 
     for epoch in range(epochs):
         model.train()  # Sets the mode of the model to training
@@ -138,7 +152,7 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", l
             # Update learning rate
             for param_group in opt.param_groups:
                 new_lr = lr_scheduler.update_learning_rate(
-                    t_counter, 0, num_batches, epochs, lr=param_group['lr'])
+                    t_counter, 0, num_batches, num_epochs=epochs, lr=param_group['lr'])
                 print("New lr:", new_lr)
                 param_group['lr'] = new_lr
 
@@ -174,13 +188,21 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", l
         print("Epoch: " + str(t_counter) + " Train loss: " + str(train_loss) + " Train PSNR: " +
               str(train_psnr) + " Val loss: " + str(val_loss) + " Val PSNR: " + str(val_psnr))
 
+        if val_psnr > best_psnr:
+            best_weights = model.state_dict()
+            best_psnr = val_psnr
+
         if (epoch + 1) % 25 == 0:
             # Save the model
             print("Saving model weights...")
-            torch.save(model.state_dict(), "./Models/" + save_path + ".pth")
+            # torch.save(model.state_dict(), "./Models/" + save_path + ".pth")
+            torch.save(best_weights, "./Models/" + save_path + ".pth")
+
+            print("saved best psnr: " + str(best_psnr))
 
             #Save the graphed results:
             print("Saving graphs...")
+            np.save("./Models/" + save_path + "_best_psnr.npy", best_psnr)
             np.save("./Models/" + save_path + "_T_val.npy", t)
             np.save("./Models/" + save_path + "_val_psnr.npy", val_psnr_history)
             np.save("./Models/" + save_path + "_training_psnr.npy", training_psnr_history)
@@ -203,6 +225,7 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", l
     l, = plt.plot(t, training_psnr_history)
     lines.append(l)
     labels.append("Training PSNR")
+    plt.grid()
     plt.title('PSNR')
     plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
     plt.show()
@@ -249,7 +272,8 @@ def fit2(model,
          batch_prints=False,
          lr_scheduler=base_lr_schedule,
          batches_per_epoch=None,  # Default: Use entire training set
-         show_summary=True):
+         show_summary=True,
+         data_aug = False):
 
     bs = trainset.batch_size
     num_batches = len(trainset)
@@ -311,7 +335,11 @@ def fit2(model,
                         epoch, t, batches_per_epoch, epochs, lr=param_group['lr'])
                     param_group['lr'] = new_lr
                 learning_rate.append(opt.param_groups[0]['lr'])
+            
+            if data_aug:
+                xb,yb = apply_image_transformations(xb,yb)
 
+            
             # Forward prop
             pred = model(xb.cuda())
             loss = loss_func(pred, yb.cuda())
@@ -384,7 +412,8 @@ def fit2(model,
         plt.ylabel('Loss')
         plt.ticklabel_format(axis='x', style='scientific')
         plt.xscale('log')
-        plt.ylim([0, 1.5])
+        #plt.ylim([0, 7000]) for bignet
+        plt.ylim([0, 1])
         plt.title('Learning rate analysis')
         plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
         plt.show()
@@ -392,13 +421,8 @@ def fit2(model,
     return train_loss_history
 
 def MSE(input, target):
-    # Crop the target to the input size - the input loses some of it's size as the model doesn't use any padding
-    crop_transform = transforms.CenterCrop(
-        size=(input.size(dim=2), input.size(dim=3)))
-    tgt = crop_transform(target)
-
     mse = F.mse_loss
-    return mse(input, tgt)
+    return mse(input, target)
 
 #Computes the absolute difference between the pixel values (instead of the squared difference)
 def MAE(input, target):
@@ -777,7 +801,7 @@ def adam_SGD_DeepNet(model, lr=0.001):
 
 
 def adam_SGD_BigNet(model, lr=0.001):
-    return optim.Adam(model.parameters(), )
+    return optim.Adam(model.parameters(), lr=lr)
 
 def reset_parameters(net):
     '''Init layer parameters.'''
@@ -860,6 +884,7 @@ def get_tensor_images_high_low(path_low, path_high, n=-1):
         im = Image.open(f)
         img = pil_tensor_converter(im)
         images_low.append(img)
+        #print("Low name: ", (f.split("\\")[1]).split(".")[0])
         counter_low -= 1
 
         #print("Image mode: " + str(im.mode))
@@ -875,7 +900,7 @@ def get_tensor_images_high_low(path_low, path_high, n=-1):
         # print("Image mode: " + str(im.mode)) - The images are RGB
         img = pil_tensor_converter(im)
         images_high.append(img)
-
+        #print("High name: ", (f.split("\\")[1]).split(".")[0])
         counter_high -= 1
     print("Done with highres...")
     # low_res_stack = torch.stack(images_low)
@@ -940,21 +965,31 @@ def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
     upscaled_dataloader = DataLoader(upscaled_img_ds, batch_size=1, shuffle=False)
     return lr_dataloader, upscaled_dataloader, picture_names
 
+angles = [0, 90, 180, 270]
 def apply_image_transformations(input, target):
-    seed = random.randrange(0, 100000)
-    jitter = transforms.ColorJitter(brightness=0.5, contrast=0.85, saturation=0.9, hue=0.5)
-    horizontalFlip = transforms.RandomHorizontalFlip(p=0.5)
-    greyscale = transforms.RandomGrayscale(p=0.1)
-    randjitter = transforms.RandomApply(nn.ModuleList([jitter]), p=1)
+    horizontalFlip = transforms.RandomHorizontalFlip(p=1)
+    greyscale = transforms.RandomGrayscale(p=1)
+    invert = transforms.RandomInvert(p=1)
 
-    torch.random.manual_seed(seed)
-    random.seed(seed)
-    transformedInput = greyscale(horizontalFlip(randjitter(input)))
-    # transformedInput = transforms.Lambda(lambda x: torch.stack([greyscale(horizontalFlip(verticalFlip(randjitter(x_)))) for x_ in x]))(input)
-    torch.random.manual_seed(seed)
-    random.seed(seed)
-    transformedTarget = greyscale(horizontalFlip(randjitter(target)))
-    # transformedTarget = transforms.Lambda(lambda x: torch.stack([greyscale(horizontalFlip(verticalFlip(randjitter(x_)))) for x_ in x]))(target)
+    flip = random.randint(0,1)
+    #greyScale = random.randint(0,1)
+    #inversion = random.randint(0,1)
+
+    transformedInput = torch.clone(input)
+    transformedTarget = torch.clone(target)
+    if flip:
+      transformedInput = horizontalFlip(transformedInput)
+      transformedTarget = horizontalFlip(transformedTarget)
+
+    #if greyScale:
+    #  transformedInput = greyscale(transformedInput)
+    #  transformedTarget = greyscale(transformedTarget)
+
+    # if inversion:
+    #   transformedInput = invert(transformedInput)
+    #   transformedTarget = invert(transformedTarget)
+      
+
 
     # Rotatus maximus
     degrees = random.choice(angles)
@@ -1061,22 +1096,24 @@ def display_feature_maps(layer_val):
 
 
 def main():
-    bs = 128 #16 for bignet, 128 for rest
-    epochs = 25
-    load_model = False
+    bs = 16 #16 for bignet, 128 for rest
+    epochs = 1
+    load_model = True
 
-    data_aug = False
+    data_aug = True
     
 
 
-    train_dl, test_dl = loadSRCNNdata(bs=bs)
-    model, loss_func, optim, load_path = setupSRCNN(load_model=load_model, lr=0.0001, load_path="FSRCNN_With_DataAug")
+    train_dl, test_dl = loadFSRCNNdata(bs=bs)
+    #test_dl = loadStanfordCars(upscaled=True)
+    model, loss_func, optim, load_path = setupBigNet(load_model=load_model, lr=0.000005, load_path="BigNet16_Basic_AUG_Anneal")
+    #testModel(model, loss_func, test_dl)
     #summary(model, input_size=(3,11,11))
-    
+    #showImage(model, "Stanford/Upscaled/sc8_Blurred", "Stanford/Cropped/sc8_crop", show_heatMap=True)
     #model = BicubicBaseline().cuda()
-    fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path, load_model=load_model, lr_scheduler = base_lr_schedule, data_augmentation=data_aug)
+    fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path, load_model=load_model, lr_scheduler = base_lr_schedule(), data_augmentation=data_aug)
     
-    #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs, lr_scheduler=opt_lr_finding_schedule)
+    #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs, lr_scheduler=opt_lr_finding_schedule, data_aug=data_aug)
 
 
     lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["butterfly"])
@@ -1099,6 +1136,62 @@ def main():
     
     evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
 
+def loadDIV2K(upscaled=False):
+    lr_path = "./Datasets/DIV2K_valid_HR/test_subset_Upscaled" if upscaled else "./Datasets/DIV2K_valid_HR/test_subset_LR"
+    hr_path = "./Datasets/DIV2K_valid_HR/test_subset_cropped"
+    return get_preprocessed_dataloader(lr_path, hr_path, bs=1)
+
+def loadStanfordCars(upscaled=False):
+    lr_path = "./Datasets/Stanford/Upscaled" if upscaled else "./Datasets/Stanford/LR"
+    hr_path = "./Datasets/Stanford/Cropped"
+    return get_preprocessed_dataloader(lr_path, hr_path, bs=1)
+
+def showImage(model, lr_path, hr_path, show_heatMap=False):
+    model.eval()
+    toTensor = transforms.ToTensor()
+    lr_file = Image.open("./Datasets/" + lr_path + ".png")
+    hr_file = Image.open("./Datasets/" + hr_path + ".png")
+    lr_image = toTensor(lr_file).cuda()
+    hr_image = toTensor(hr_file).cuda()
+    predicted = model(lr_image)
+    show_tensor_as_image(lr_image)
+    show_tensor_as_image(hr_image)
+    show_tensor_as_image(predicted.clamp(0, 1))
+    print("PSNR: ", PSNRaccuracy(predicted, hr_image))
+    print("Baseline: ", PSNRaccuracy(lr_image, hr_image))
+
+    if show_heatMap:
+        heatMap = torch.abs(hr_image - predicted).detach().cpu().numpy()
+        plt.imshow(heatMap.mean(axis=0), cmap="viridis", interpolation="nearest", vmin=0, vmax=1)
+        plt.colorbar()
+        plt.show()
+        
+def test_lr():
+    start_lr = 0.00008
+    max_lr = 0.001
+    lr = start_lr
+    epochs = 100
+    scheduler = cyclic_lr_schedule(max_lr, start_lr)
+    lr_history = [] 
+    epoch_hist = []
+    for epoch in range(epochs):
+        lr_history.append(lr)
+        epoch_hist.append(epoch)
+        lr = scheduler.update_learning_rate(epoch, 0, 0, epochs, lr)
+
+    plt.figure()
+    lines = []
+    labels = []
+    l, = plt.plot(epoch_hist, lr_history)
+    lines.append(l)
+    labels.append("Lr_hist")
+    plt.xlabel('Epoch')
+    plt.ylabel('LR')
+    plt.title('Learning rate analysis')
+    plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
+    plt.show()
+
 if __name__ == "__main__":
+    #test_lr()
     main()
 

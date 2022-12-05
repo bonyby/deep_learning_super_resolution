@@ -119,4 +119,6 @@ def crop_center(img, cropx, cropy):
 #makeBlurredImages("Set19/Original", "Set19/OriginalCropx3", "Set19/LR_gaussPIL", "Set19/Upscaled_x3gaussPIL", scale=3)
 #makeBlurredImagesx2("Set19/Original", "Set19/LR_x2")
 
+#makeBlurredImages("DIV2K_valid_HR/test_subset","DIV2K_valid_HR/test_subset_cropped", "DIV2K_valid_HR/test_subset_LR", "DIV2K_valid_HR/test_subset_Upscaled", scale=3)
+#makeBlurredImages("Stanford/Original", "Stanford/Cropped", "Stanford/LR","Stanford/Upscaled", scale=3)
 #makeDatasetIntoPatchDatasetx2("T91/T91_Original", "T91/T91_HR_Patches_x2", "T91/T91_LR_Patches_x2", "T91/T91_Upscaled_Patches_x2")
