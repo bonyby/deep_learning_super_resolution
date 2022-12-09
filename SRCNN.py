@@ -21,6 +21,7 @@ from torch.utils.data import TensorDataset
 from torch.utils.data import Dataset
 from PIL import Image
 from BigNet import BigNet
+from BigNet import BigAttentionNet
 
 
 
@@ -79,8 +80,8 @@ def opt_lr_finding_schedule(curr_epoch, curr_batch, epoch_batches, num_epochs, l
     #print("lr:", lr)
     #min_lr for bignet:0.0000001, max_lr: 1
     #min_lr for rest: 0.000001, max_lr: 0.1
-    min_lr = 0.0000001
-    max_lr = 0.1
+    min_lr = 0.00000001
+    max_lr = 1
     step_size = abs(math.log(max_lr/min_lr) / (epoch_batches*num_epochs))
     if(lr > max_lr):
         return lr + min_lr
@@ -116,13 +117,16 @@ class cyclic_lr_schedule:
 
 
 
-def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", load_model=False, lr_scheduler=None, data_augmentation=False):
+def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", load_model=False, lr_scheduler=None, data_augmentation=False, save_best = False):
     num_batches = len(train_dl)
     # Total number of batches
     num_elements = len(train_dl.dataset)
     load_state =  "preloaded" if load_model else "new" 
     print("Running Fit with", load_state, "model:", str(type(model).__name__), "and data augmentation set to", data_augmentation)
     print('Epochs:', epochs, 'Total number of batches', num_batches, 'Total number of elements', num_elements)
+    
+    if opt is not None:
+        print("Starting with learning rate:", opt.param_groups[0]['lr']) 
 
     val_psnr_history = []
     training_psnr_history = []
@@ -144,7 +148,8 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", l
         training_psnr_history = np.load("./Models/" + save_path + "_training_psnr.npy", allow_pickle=True).tolist()
         val_loss_history = np.load("./Models/" + save_path + "_val_loss.npy", allow_pickle=True).tolist()
         training_loss_history = np.load("./Models/" + save_path + "_training_loss.npy", allow_pickle=True).tolist()
-
+    #print("best_psnr:", max(val_psnr_history))
+    #return
     for epoch in range(epochs):
         model.train()  # Sets the mode of the model to training
 
@@ -191,14 +196,17 @@ def fit(model, loss_func, opt, train_dl, valid_dl, epochs, save_path="FSCRNN", l
         if val_psnr > best_psnr:
             best_weights = model.state_dict()
             best_psnr = val_psnr
-
-        if (epoch + 1) % 25 == 0:
+        #TODO: should be 25
+        if (epoch + 1) % 5 == 0:
             # Save the model
             print("Saving model weights...")
             # torch.save(model.state_dict(), "./Models/" + save_path + ".pth")
-            torch.save(best_weights, "./Models/" + save_path + ".pth")
-
-            print("saved best psnr: " + str(best_psnr))
+            if save_best:
+              torch.save(best_weights, "./Models/" + save_path + ".pth")
+              print("saved best psnr: " + str(best_psnr))
+            else:
+              torch.save(model.state_dict(), "./Models/" + save_path + ".pth")
+              print("saved latest psnr")
 
             #Save the graphed results:
             print("Saving graphs...")
@@ -413,7 +421,7 @@ def fit2(model,
         plt.ticklabel_format(axis='x', style='scientific')
         plt.xscale('log')
         #plt.ylim([0, 7000]) for bignet
-        plt.ylim([0, 1])
+        plt.ylim([0, 3500])
         plt.title('Learning rate analysis')
         plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
         plt.show()
@@ -612,9 +620,8 @@ class BRFSRCNN(nn.Module):
         self.params = nn.ModuleDict({
             'convs': nn.ModuleList([self.conv1, self.conv2, self.conv3, self.bnorm1, self.conv4, self.conv5, self.convm1, self.bnorm2, self.convm2, self.bnorm3, self.convm3, self.bnorm4, self.convm4, self.bnorm5, self.convm5, self.bnorm6, self.convm6, self.bnorm7, self.convm7, self.bnorm8, self.convm8, self.bnorm9, self.conv6, self.conv7]),
            'deconvs': nn.ModuleList([self.deconv])})
-        # self.params = nn.ModuleDict({
-        #    'convs': nn.ModuleList([]),
-        #    'deconvs': nn.ModuleList([])})
+
+
 
     def forward(self, x):
         #print("x init size: " + str(x.size()))
@@ -681,19 +688,6 @@ class BRFSRCNN(nn.Module):
 
 
 
-def setupSRCNN(load_model=False, load_path="SRCNN", lr=0.001):
-    model = ModularSRCNN().cuda()
-
-    if load_model:
-        model.load_state_dict(torch.load("./Models/"+ load_path + ".pth" ))
-    else:
-        reset_parameters(model)
-
-    loss_func = MSE
-    optim = adam_SGD(model, lr=lr)
-
-    return model, loss_func, optim, load_path
-
 
 def loadSRCNNdata(bs=128, n=-1, scale=3):
     if(scale == 3):
@@ -707,6 +701,40 @@ def loadSRCNNdata(bs=128, n=-1, scale=3):
         test_dl = get_preprocessed_dataloader(
             "./Datasets/Set19/Blurred_x2", "./Datasets/Set19/Original", bs=1)
     return train_dl, test_dl
+
+def loadFSRCNNdata(bs=128, n=-1, scale=3):
+    if(scale == 3):
+        train_dl = get_preprocessed_dataloader(
+            "./Datasets/T91/T91_LR_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
+        test_dl = get_preprocessed_dataloader(
+            "./Datasets/Set19/LR_x3gaussPIL", "./Datasets/Set19/OriginalCropx3", bs=1, shuffle=False)
+    elif(scale == 2):
+        train_dl = get_preprocessed_dataloader(
+            "./Datasets/T91/T91_LR_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs)
+        test_dl = get_preprocessed_dataloader(
+            "./Datasets/Set19/LR_x2", "./Datasets/Set19/Original", bs=1, shuffle=False)
+    return train_dl, test_dl
+
+def loadBigAttentionNetdata(bs=16, n=-1, scale=3):
+    if(scale == 3):
+        train_dl = get_preprocessed_dataloader(
+            "./Datasets/DatasetsAttention/T91_48LR", "./Datasets/DatasetsAttention/T91_48Patch", n=n, bs=bs)
+        test_dl = get_preprocessed_dataloader(
+            "./Datasets/DatasetsAttention/Set19_48LR", "./Datasets/DatasetsAttention/Set19_48Cropped", bs=1, shuffle=False)
+    return train_dl, test_dl
+
+def setupSRCNN(load_model=False, load_path="SRCNN", lr=0.001):
+    model = ModularSRCNN().cuda()
+
+    if load_model:
+        model.load_state_dict(torch.load("./Models/"+ load_path + ".pth" ))
+    else:
+        reset_parameters(model)
+
+    loss_func = MSE
+    optim = adam_SGD(model, lr=lr)
+
+    return model, loss_func, optim, load_path
 
 
 def setupFSRCNN(load_model=False, load_path="FSRCNN", lr=0.001):
@@ -733,6 +761,7 @@ def setupBRFSRCNN(load_model= False, load_path="BRFSRCNN", lr=0.001):
     loss_func = MSE
     optim = adam_SGD_DeepNet(model, lr=lr)
 
+
     return model, loss_func, optim, load_path
 
 def setupBigNet(load_model=False, load_path="BigNet", lr=0.0001):
@@ -748,18 +777,27 @@ def setupBigNet(load_model=False, load_path="BigNet", lr=0.0001):
 
     return model, loss_func, optim, load_path
 
-def loadFSRCNNdata(bs=128, n=-1, scale=3):
-    if(scale == 3):
-        train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_LR_Patches_x3gaussPIL", "./Datasets/T91/T91_HR_Patches", n=n, bs=bs)
-        test_dl = get_preprocessed_dataloader(
-            "./Datasets/Set19/LR_x3gaussPIL", "./Datasets/Set19/OriginalCropx3", bs=1, shuffle=False)
-    elif(scale == 2):
-        train_dl = get_preprocessed_dataloader(
-            "./Datasets/T91/T91_LR_Patches_x2", "./Datasets/T91/T91_HR_Patches_x2", n=n, bs=bs)
-        test_dl = get_preprocessed_dataloader(
-            "./Datasets/Set19/LR_x2", "./Datasets/Set19/Original", bs=1, shuffle=False)
-    return train_dl, test_dl
+
+
+def setupBigAttentionNet(load_model=False, load_path="BigAttentionNet", lr=0.0001):
+    model = BigAttentionNet().cuda()
+
+    if load_model:
+        model.load_state_dict(torch.load("./Models/" + load_path + ".pth"))
+    else:
+        reset_parameters(model.bignet)
+        for m in model.attention.modules():
+            if isinstance(m,nn.Conv2d):
+                print("Initting xavier")
+                nn.init.kaiming_normal_(m.weight)
+        nn.init.xavier_normal_(model.attention.postpool3.weight)
+
+    loss_func = MAE
+    optim = adam_SGD_BigNet(model, lr=lr)
+
+    return model, loss_func, optim, load_path
+
+
 
 
 class BicubicBaseline(nn.Module):
@@ -769,8 +807,6 @@ class BicubicBaseline(nn.Module):
     def forward(self, x):
         return x
 
-# Function handle that returns an optimizer
-# We have learning rate 0.0001 for the first two layers and 0.00001 for the last layer
 
 
 def basic_SGD(model, lr=0.0001, momentum=0.9):
@@ -835,12 +871,17 @@ def get_preprocessed_dataloaders(lowPath, highPath, n=-1, bs=8):
     return train_dl, test_dl, val_dl
 
 
-def show_tensor_as_image(tensor, title=None):
+def show_tensor_as_image(tensor, title=None, save=False, save_name="none"):
     if tensor.ndimension() == 4:
         tensor = tensor[0]
 
     tensor_pil_converter = transforms.ToPILImage()
-    tensor_pil_converter(tensor).show(title=title)
+    img = tensor_pil_converter(tensor)
+    img.show(title=title)
+    savename = random.randint(0, 10000000)
+    if save:
+        img.save("./Results/" + save_name + "/" + str(savename) + ".png")
+
 
 
 # This function works on preprocessed data
@@ -885,6 +926,7 @@ def get_tensor_images_high_low(path_low, path_high, n=-1):
         img = pil_tensor_converter(im)
         images_low.append(img)
         #print("Low name: ", (f.split("\\")[1]).split(".")[0])
+        #print("counter_low:", counter_low)
         counter_low -= 1
 
         #print("Image mode: " + str(im.mode))
@@ -913,7 +955,8 @@ def get_tensor_images_high_low(path_low, path_high, n=-1):
     return ImageDataset(images_low, images_high)
 
 def get_random_images_for_prediction(n=1, scale=3, listOfImages=[]):
-    path = "./Datasets/Set19/OriginalCropx3/*"
+    #path = "./Datasets/Set19/OriginalCropx3/*"
+    path = "./Datasets/DatasetsAttention/Set19_Cropped/*"
     files = [f for f in glob.iglob(path)]
     random.shuffle(files)
 
@@ -972,22 +1015,22 @@ def apply_image_transformations(input, target):
     invert = transforms.RandomInvert(p=1)
 
     flip = random.randint(0,1)
-    #greyScale = random.randint(0,1)
-    #inversion = random.randint(0,1)
+    greyScale = random.randint(0,4)
+    inversion = random.randint(0,4)
 
     transformedInput = torch.clone(input)
     transformedTarget = torch.clone(target)
     if flip:
-      transformedInput = horizontalFlip(transformedInput)
-      transformedTarget = horizontalFlip(transformedTarget)
+        transformedInput = horizontalFlip(transformedInput)
+        transformedTarget = horizontalFlip(transformedTarget)
 
-    #if greyScale:
-    #  transformedInput = greyscale(transformedInput)
-    #  transformedTarget = greyscale(transformedTarget)
+    if greyScale:
+        transformedInput = greyscale(transformedInput)
+        transformedTarget = greyscale(transformedTarget)
 
-    # if inversion:
-    #   transformedInput = invert(transformedInput)
-    #   transformedTarget = invert(transformedTarget)
+    if inversion:
+        transformedInput = invert(transformedInput)
+        transformedTarget = invert(transformedTarget)
       
 
 
@@ -999,29 +1042,35 @@ def apply_image_transformations(input, target):
     return transformedInput, transformedTarget
 
 
-def evaluateModel(model, lr_dl, upscaled_dl, picture_numbers, show_images=True):
+def evaluateModel(model, lr_dl, upscaled_dl, picture_numbers, SRCNN = False, show_images=True, save_img = False, save_path="none"):
     model.eval()
 
     counter1 = 0
-    for xb, yb in lr_dl:
-        input = xb.cuda()[None, 0]
-        result = model(input)
-        clampedResult = result.clamp(0, 1)
+    if SRCNN == False:
+        for xb, yb in lr_dl:
+            input = xb.cuda()[None, 0]
+            result = model(input)
+            clampedResult = result.clamp(0, 1)
 
-        print(str(picture_numbers[counter1]) + " upscaled PSNR: " + str(PSNRaccuracy(result, yb[0].cuda())))
-        if show_images:
-            show_tensor_as_image(clampedResult, "result")
-            show_tensor_as_image(yb[0], "original")
-            show_tensor_as_image(input, "input")
-        counter1 += 1
+            print(str(picture_numbers[counter1]) + " upscaled PSNR: " + str(PSNRaccuracy(result, yb[0].cuda())))
+            if show_images:
+                show_tensor_as_image(clampedResult, "result", save=save_img, save_name=save_path)
+                #show_tensor_as_image(yb[0], "original")
+                #show_tensor_as_image(input, "input")
+            counter1 += 1
         
 
     counter2 = 0
     for xb, yb in upscaled_dl:
         blurred = xb.cuda()[None, 0]
+        if SRCNN:
+            res = model(blurred)
+            print(str(picture_numbers[counter2]) + " SRCNN PSNR:" + str(PSNRaccuracy(res, yb[0].cuda())))
+            show_tensor_as_image(res.clamp(0,1), "SRCNN res", save=save_img, save_name=save_path)
+            #show_tensor_as_image(yb[0], "original")
         print(str(picture_numbers[counter2]) + " bicubic upscale reference PSNR:" + str(PSNRaccuracy(blurred, yb[0].cuda())))
-        if show_images:
-            show_tensor_as_image(blurred, "blurred")
+        #if show_images:
+            #show_tensor_as_image(blurred, "blurred")
         counter2 += 1
 
 
@@ -1090,51 +1139,91 @@ def display_feature_maps(layer_val):
             counter += 1
 
     output_feature_tensor = torch.from_numpy(output_feature_array)
+    print("Array vals:", torch.mean(output_feature_tensor))
     show_tensor_as_image(output_feature_tensor)
 
 # ------------------- CODE -------------------
 
 
 def main():
-    bs = 16 #16 for bignet, 128 for rest
-    epochs = 1
-    load_model = True
-
+    bs = 128 #16 for bignet, 128 for rest
+    epochs = 100
+    load_model = False
     data_aug = True
-    
 
-
-    train_dl, test_dl = loadFSRCNNdata(bs=bs)
-    #test_dl = loadStanfordCars(upscaled=True)
-    model, loss_func, optim, load_path = setupBigNet(load_model=load_model, lr=0.000005, load_path="BigNet16_Basic_AUG_Anneal")
-    #testModel(model, loss_func, test_dl)
-    #summary(model, input_size=(3,11,11))
-    #showImage(model, "Stanford/Upscaled/sc8_Blurred", "Stanford/Cropped/sc8_crop", show_heatMap=True)
+    ##### Training Setup #####
+    # Change the setuploader and dataloader and the load_path to train a given model
+    #model, loss_func, optim, load_path = setupBigAttentionNet(load_model=load_model, lr=0.0001, load_path="EvenBigger")
+    #train_dl, test_dl = loadFSRCNNdata(bs=bs)
     #model = BicubicBaseline().cuda()
-    fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, save_path=load_path, load_model=load_model, lr_scheduler = base_lr_schedule(), data_augmentation=data_aug)
-    
+
+    #Main training function
+    #fit(model, loss_func, opt=optim, train_dl=train_dl, valid_dl=test_dl, epochs=epochs, 
+    #    save_path=load_path, load_model=load_model, lr_scheduler = base_lr_schedule(), data_augmentation=data_aug, save_best=False)
+
+
+
+
+    #summary(model, input_size=(3,11,11))
+
+    #train_dl, test_dl = loadFSRCNNdata(bs=bs)
+    model, loss_func, optim, load_path = setupBigAttentionNet(load_model=load_model, lr=0.001, load_path="AttentionTestFinal2")
+
+    #print("model weigths:", torch.mean())  
+    #
+
+    ##### Test the learning rate #####
+    # lr_small = 0.000001
+    # lr_large = 1
+    #model, loss_func, optim, load_path = setupBigAttentionNet(load_model=load_model, lr=lr_small, load_path="AttentionTestFinal2")
     #fit2(model, loss_func=loss_func, opt=optim, trainset=train_dl, testset=test_dl, epochs=epochs, lr_scheduler=opt_lr_finding_schedule, data_aug=data_aug)
 
 
-    lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["butterfly"])
+    ##### Feature Output Testing #####
+    #load_model = True
 
-    model.conv1.register_forward_hook(get_activation('conv1'))
-    model.relu1.register_forward_hook(get_activation('relu1'))
-    model.relu2.register_forward_hook(get_activation('relu2'))
-    #model.relum4.register_forward_hook(get_activation('relum4'))
-    #evaluateLayers(model, upscaled_dl, picture_numbers)
+    #model, loss_func, optim, load_path = setupBigAttentionNet(load_model=load_model, lr=0.001, load_path="AttentionTestFinal2")
+    #model.bignet.register_forward_hook(get_activation('mask'))
+    # model.attention.postpool22.register_forward_hook(get_activation('pp22'))
+    # model.attention.resBlock1.register_forward_hook(get_activation('resblock1'))
+    # #model.relum4.register_forward_hook(get_activation('relum4'))
+    #lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["butterfly"])
+    #evaluateLayers(model, lr_dl, picture_numbers)
+    # #Choose layer to look at
+    #layer_val1 = layer_output['mask']
+    #layer_val2 = layer_output['pp22']
+    #layer_val3 = layer_output['resblock1']
+    #display_feature_maps(layer_val1)
+    #display_feature_maps(layer_val2)
+    #display_feature_maps(layer_val3)
+
+
+
+
+
+
+    ##### Model evaluation and Image testing #####:
+    #load_model = True
+    # upscaled = True   #True if SRCNN
+
+    # model, loss_func, optim, load_path = setupBigNet(load_model=load_model, lr=0.00001, load_path="BigNet16_More_AUG_Anneal")
+    # #model = BicubicBaseline().cuda()
+
+    # #dk = loadDIV2K(upscaled=upscaled) 
+    # #sc = loadStanfordCars(upscaled=upscaled)
+    # path = "BigNet Results"
+    # showImage(model, "Stanford/LR/sc6_LR", "Stanford/Cropped/sc6_crop", show_heatMap=False, save=True, save_path=path)
+    # showImage(model, "Stanford/LR/sc17_LR", "Stanford/Cropped/sc17_crop", show_heatMap=False, save=True, save_path=path)
+    # showImage(model, "DIV2K_valid_hr/test_subset_LR/0846_LR", "DIV2K_valid_hr/test_subset_cropped/0846", show_heatMap=False, save=True, save_path=path)
+    # showImage(model, "DIV2K_valid_hr/test_subset_LR/0804_LR", "DIV2K_valid_hr/test_subset_cropped/0804", show_heatMap=False, save=True, save_path=path)
+
+    #lr_dl, upscaled_dl, picture_numbers = get_random_images_for_prediction(scale=3, listOfImages=["butterfly", "baboon", "ppt3"])
+    # evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, SRCNN = False, show_images=True, save_img=True, save_path=path)
     
 
-    #Choose layer to look at
-    layer_val = layer_output['relu1']
-    #display_feature_maps(layer_val)
+    #For srcnn showImage(model, "Stanford/Upscaled/sc6_Blurred", "Stanford/Cropped/sc6_crop", show_heatMap=False, save=True, save_path=path)
+    #    showImage(model, "DIV2K_valid_hr/test_subset_Upscaled/0846_Blurred", "DIV2K_valid_hr/test_subset_cropped/0846", show_heatMap=False, save=True, save_path=path)
 
-    
-    #Look at first layer of conv filters
-    kernel_weights = model.conv1.weight
-    #display_kernel_weights(kernel_weights)
-    
-    evaluateModel(model=model, lr_dl=lr_dl, upscaled_dl=upscaled_dl, picture_numbers=picture_numbers, show_images=True)
 
 def loadDIV2K(upscaled=False):
     lr_path = "./Datasets/DIV2K_valid_HR/test_subset_Upscaled" if upscaled else "./Datasets/DIV2K_valid_HR/test_subset_LR"
@@ -1146,27 +1235,31 @@ def loadStanfordCars(upscaled=False):
     hr_path = "./Datasets/Stanford/Cropped"
     return get_preprocessed_dataloader(lr_path, hr_path, bs=1)
 
-def showImage(model, lr_path, hr_path, show_heatMap=False):
+def showImage(model, lr_path, hr_path, show_heatMap=False, baseline=False, save=False, save_path="none"):
     model.eval()
     toTensor = transforms.ToTensor()
     lr_file = Image.open("./Datasets/" + lr_path + ".png")
     hr_file = Image.open("./Datasets/" + hr_path + ".png")
     lr_image = toTensor(lr_file).cuda()
+    lr_image = torch.unsqueeze(lr_image,0) # for BRFSRCNN
     hr_image = toTensor(hr_file).cuda()
     predicted = model(lr_image)
-    show_tensor_as_image(lr_image)
-    show_tensor_as_image(hr_image)
-    show_tensor_as_image(predicted.clamp(0, 1))
+    
+    show_tensor_as_image(predicted.clamp(0, 1), save=save, save_name=save_path)
     print("PSNR: ", PSNRaccuracy(predicted, hr_image))
-    print("Baseline: ", PSNRaccuracy(lr_image, hr_image))
+    if baseline:
+        show_tensor_as_image(lr_image)
+        show_tensor_as_image(hr_image)
+        print("Baseline: ", PSNRaccuracy(lr_image, hr_image))
 
     if show_heatMap:
+        predicted = torch.squeeze(predicted, 0)
         heatMap = torch.abs(hr_image - predicted).detach().cpu().numpy()
         plt.imshow(heatMap.mean(axis=0), cmap="viridis", interpolation="nearest", vmin=0, vmax=1)
         plt.colorbar()
         plt.show()
         
-def test_lr():
+def test_lr_schedule():
     start_lr = 0.00008
     max_lr = 0.001
     lr = start_lr
@@ -1191,7 +1284,83 @@ def test_lr():
     plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
     plt.show()
 
-if __name__ == "__main__":
-    #test_lr()
-    main()
 
+
+
+
+
+# This is used to generate plots based on the trained models
+def show_results():
+    SRCNN = "SRCNN"
+    FSRCNN = "FSRCNN_2"
+    BRFSRCNN_No_Aug = "BRFSRCNN_NO_AUG_Anneal"
+    BRFSRCNN = "BRFSRCNN_AUG_FLIPS"
+    BigNetBasic = "BigNet16_Basic_AUG_Anneal"
+    BigNet = "BigNet16_More_AUG_Anneal"
+
+    SRCNN_val = np.load("./Models/" + SRCNN + "_val_psnr.npy", allow_pickle=True).tolist()
+    FSRCNN_val = np.load("./Models/" + FSRCNN + "_val_psnr.npy", allow_pickle=True).tolist()
+    BRFSRCNNNOAUG_val = np.load("./Models/" + BRFSRCNN_No_Aug + "_val_psnr.npy", allow_pickle=True).tolist()
+    BRFSRCNN_val = np.load("./Models/" + BRFSRCNN + "_val_psnr.npy", allow_pickle=True).tolist()
+    BignetBasic_val = np.load("./Models/" + BigNetBasic + "_val_psnr.npy", allow_pickle=True).tolist()
+    Bignet_val = np.load("./Models/" + BigNet + "_val_psnr.npy", allow_pickle=True).tolist()
+
+    SRCNN_train = np.load("./Models/" + SRCNN + "_training_psnr.npy", allow_pickle=True).tolist()
+    FSRCNN_train = np.load("./Models/" + FSRCNN + "_training_psnr.npy", allow_pickle=True).tolist()
+    BRFSRCNNNOAUG_train = np.load("./Models/" + BRFSRCNN_No_Aug + "_training_psnr.npy", allow_pickle=True).tolist()
+    BRFSRCNN_train = np.load("./Models/" + BRFSRCNN + "_training_psnr.npy", allow_pickle=True).tolist()
+    BignetBasic_train = np.load("./Models/" + BigNetBasic + "_training_psnr.npy", allow_pickle=True).tolist()
+    Bignet_train = np.load("./Models/" + BigNet + "_training_psnr.npy", allow_pickle=True).tolist()
+
+    t = range(0,250)
+
+    t2 = range(0,200)
+    plt.figure()
+    lines = []
+    labels = []
+
+    l, = plt.plot(t, SRCNN_val[0:250], linewidth=1.5, c='b')
+    lines.append(l)
+    labels.append("SRCNN Validation")
+    l, = plt.plot(t, SRCNN_train[0:250], linewidth=3, ls=':', c='b')
+    lines.append(l)
+    labels.append("SRCNN Training")
+
+    l, = plt.plot(t, FSRCNN_val[0:250], linewidth=1.5, c='r')
+    lines.append(l)
+    labels.append("FSRCNN Validation")
+    l, = plt.plot(t, FSRCNN_train[0:250], linewidth=3, ls=':', c='r')
+    lines.append(l)
+    labels.append("FSRCNN Training")
+
+
+    plt.ylabel('PSNR (dB)')
+    plt.xlabel('Epochs')
+    plt.ylim([24, 29])
+    plt.grid()
+    plt.title('SRCNN vs FSRCNN')
+    plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
+    plt.show()
+
+
+
+
+if __name__ == "__main__":
+    main()
+    #show_results()
+
+# plt.figure()
+#         lines = []
+#         labels = []
+#         l, = plt.plot(learning_rate, train_loss_history)
+#         lines.append(l)
+#         labels.append("Loss")
+#         plt.xlabel('Learning Rate')
+#         plt.ylabel('Loss')
+#         plt.ticklabel_format(axis='x', style='scientific')
+#         plt.xscale('log')
+#         #plt.ylim([0, 7000]) for bignet
+#         plt.ylim([0, 3500])
+#         plt.title('Learning rate analysis')
+#         plt.legend(lines, labels, loc=(1, 0), prop=dict(size=14))
+#         plt.show()
